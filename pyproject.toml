@@ -1,0 +1,33 @@
+[project]
+name = "susa"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Noam Zaks", email = "noam@noamzaks.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "libvirt-python>=12.6.0",
+    "pydantic>=2.13.4",
+    "pydantic-libvirt",
+    "pydantic-xml>=2.21.1",
+]
+
+[project.scripts]
+susa = "susa:main"
+
+[build-system]
+requires = ["uv_build>=0.11.7,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+pydantic-libvirt = { git = "https://github.com/noamzaks/pydantic-libvirt" }
+
+[dependency-groups]
+dev = [
+    "ipython>=9.16.1",
+    "mypy>=2.3.0",
+    "pre-commit>=4.6.2",
+    "ruff>=0.16.3",
+]
