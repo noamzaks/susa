@@ -24,6 +24,11 @@ build-backend = "uv_build"
 [tool.uv.sources]
 pydantic-libvirt = { git = "https://github.com/noamzaks/pydantic-libvirt" }
 
+[tool.mypy]
+strict = true
+follow_untyped_imports = true
+untyped_calls_exclude = ["IPython"]
+
 [dependency-groups]
 dev = [
     "ipython>=9.16.1",

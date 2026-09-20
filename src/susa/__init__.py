@@ -14,6 +14,103 @@ import IPython
 import libvirt as lv
 import pydantic_libvirt.domain as lvdomain
 import pydantic_libvirt.network as lvnetwork
+import pydantic_libvirt.domainsnapshot as lvsnapshot
+
+
+LINUX_CODESET = {
+    "ESC": 1,
+    "BACKSPACE": 14,
+    "TAB": 15,
+    "ENTER": 28,
+    "CAPSLOCK": 58,
+    "SPACE": 57,
+    "LINEFEED": 92,
+    "1": 2,
+    "2": 3,
+    "3": 4,
+    "4": 5,
+    "5": 6,
+    "6": 7,
+    "7": 8,
+    "8": 9,
+    "9": 10,
+    "0": 11,
+    "Q": 16,
+    "W": 17,
+    "E": 18,
+    "R": 19,
+    "T": 20,
+    "Y": 21,
+    "U": 22,
+    "I": 23,
+    "O": 24,
+    "P": 25,
+    "A": 30,
+    "S": 31,
+    "D": 32,
+    "F": 33,
+    "G": 34,
+    "H": 35,
+    "J": 36,
+    "K": 37,
+    "L": 38,
+    "Z": 44,
+    "X": 45,
+    "C": 46,
+    "V": 47,
+    "B": 48,
+    "N": 49,
+    "M": 50,
+    "LEFTCTRL": 29,
+    "LEFTSHIFT": 42,
+    "LEFTALT": 56,
+    "RIGHTCTRL": 97,
+    "RIGHTSHIFT": 54,
+    "RIGHTALT": 100,
+    "LEFTMETA": 125,
+    "RIGHTMETA": 126,
+    "COMPOSE": 127,
+    "MINUS": 12,
+    "EQUAL": 13,
+    "LEFTBRACE": 26,
+    "RIGHTBRACE": 27,
+    "SEMICOLON": 39,
+    "APOSTROPHE": 40,
+    "GRAVE": 41,
+    "BACKSLASH": 43,
+    "COMMA": 51,
+    "DOT": 52,
+    "SLASH": 53,
+    "ASTERISK": 55,
+    "F1": 59,
+    "F2": 60,
+    "F3": 61,
+    "F4": 62,
+    "F5": 63,
+    "F6": 64,
+    "F7": 65,
+    "F8": 66,
+    "F9": 67,
+    "F10": 68,
+    "F11": 87,
+    "F12": 88,
+    "F13": 183,
+    "F14": 184,
+    "F15": 185,
+    "SYSRQ": 99,
+    "SCROLLLOCK": 70,
+    "PAUSE": 119,
+    "INSERT": 110,
+    "DELETE": 111,
+    "HOME": 102,
+    "END": 107,
+    "PAGEUP": 104,
+    "PAGEDOWN": 109,
+    "UP": 103,
+    "LEFT": 105,
+    "RIGHT": 106,
+    "DOWN": 108,
+}
 
 
 def random_id(length: int) -> str:
@@ -87,19 +184,20 @@ class Network:
             ],
         )
         self.network: lv.virNetwork | None = None
+        self.conn: lv.virConnect | None = None
 
     def __enter__(self) -> Self:
         if self.network is not None:
             raise ValueError("Cannot create already created network!")
 
-        conn = Connection.current_conn()
+        self.conn = Connection.current_conn()
 
         tree = self.spec.to_xml_tree(skip_empty=True)
         ET.indent(tree)
         xml = ET.tostring(tree, encoding="unicode")
         logging.info(f"Creating network {self.name}\n{xml}")
 
-        self.network = conn.networkCreateXML(xml)
+        self.network = self.conn.networkCreateXML(xml)
         return self
 
     def __exit__(
@@ -114,7 +212,7 @@ class Network:
 
     @property
     def name(self) -> str:
-        return self.spec.name.value  # type: ignore[no-any-return]
+        return self.spec.name.value
 
 
 class Interface:
@@ -172,42 +270,90 @@ class LinkedCloneDisk(Disk):
         subprocess.run(["qemu-img", "commit", self.path], check=True)
 
 
+class Snapshot:
+    def __init__(self, domain: lv.virDomain):
+        self.domain = domain
+        self.spec = lvsnapshot.domainsnapshot(
+            name=lvsnapshot.name(value=f"susa-{random_id(10)}"),
+            domain=lvsnapshot.domain(uuid=lvsnapshot.uuid(value=domain.UUIDString())),
+        )
+        tree = self.spec.to_xml_tree(skip_empty=True)
+        ET.indent(tree)
+        xml = ET.tostring(tree, encoding="unicode")
+        logging.info(f"Creating snapshot for domain {self.domain.name()}\n{xml}")
+        self.snapshot = self.domain.snapshotCreateXML(xml)
+
+    def revert(self) -> None:
+        self.domain.revertToSnapshot(self.snapshot)
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        self.revert()
+
+
 class Machine:
     def __init__(
-        self, interfaces: list[Interface] | None = None, disks: list[Disk] | None = None
+        self,
+        interfaces: list[Interface] | None = None,
+        disks: list[Disk] | None = None,
+        nvram: str | Path | None = None,
     ) -> None:
         self.spec = lvdomain.domain(
-            type="kvm",
+            type="qemu",
             name=lvdomain.name(value=f"susa-{random_id(10)}"),
             memory=lvdomain.resources_memory(value=2, unit="GiB"),
             vcpu=lvdomain.resources_vcpu(value=2),
             os=lvdomain.os(
-                type=lvdomain.os_type(value="hvm", arch="x86_64", machine="pc")
+                type=lvdomain.os_type(value="hvm", arch="aarch64", machine="virt"),
+                loader=lvdomain.loader(
+                    value="/usr/share/AAVMF/AAVMF_CODE.fd",
+                    type="pflash",
+                    readonly="yes",
+                ),
+                nvram=lvdomain.os_nvram(value=str(nvram), format="qcow2")
+                if nvram is not None
+                else None,
             ),
             features=lvdomain.features(
                 acpi=lvdomain.features_acpi(),
                 apic=lvdomain.apic(),
-                vmport=lvdomain.vmport(state="off"),
             ),
             cpu=lvdomain.guestcpu(
-                mode="host-passthrough", check="none", migratable="on"
+                mode="custom", match="exact", model=lvdomain.cpu_model(value="max")
             ),
             devices=lvdomain.devices(
                 video_list=[
-                    lvdomain.video(model=lvdomain.video_model(type="vga")),
+                    lvdomain.video(model=lvdomain.video_model(type="virtio")),
                 ],
                 graphics_list=[
                     lvdomain.graphics(type="vnc", port=-1),
                 ],
                 input_list=[
-                    lvdomain.devices_input(type="mouse", bus="ps2"),
-                    lvdomain.devices_input(type="keyboard", bus="ps2"),
+                    lvdomain.devices_input(type="mouse", bus="usb"),
+                    lvdomain.devices_input(type="keyboard", bus="usb"),
+                ],
+                controller_list=[
+                    lvdomain.controller(type="pci", index=0, model="pcie-root"),
+                    lvdomain.controller(type="usb", index=0),
+                ],
+                console_list=[
+                    lvdomain.console(
+                        type="pty", target=lvdomain.qemucdev_tgt_def(type="serial")
+                    )
                 ],
                 disk_list=[],
                 interface_list=[],
             ),
         )
         self.domain: lv.virDomain | None = None
+        self.conn: lv.virConnect | None = None
 
         for interface in interfaces or []:
             self.add_interface(interface)
@@ -219,14 +365,14 @@ class Machine:
         if self.domain is not None:
             raise ValueError("Cannot create already created machine!")
 
-        conn = Connection.current_conn()
+        self.conn = Connection.current_conn()
 
         tree = self.spec.to_xml_tree(skip_empty=True)
         ET.indent(tree)
         xml = ET.tostring(tree, encoding="unicode")
         logging.info(f"Creating domain {self.name}\n{xml}")
 
-        self.domain = conn.createXML(xml)
+        self.domain = self.conn.createXML(xml)
         return self
 
     def __exit__(
@@ -241,7 +387,32 @@ class Machine:
 
     @property
     def name(self) -> str:
-        return self.spec.name.value  # type: ignore[no-any-return]
+        return self.spec.name.value
+
+    def snapshot(self) -> Snapshot:
+        assert self.domain is not None
+        return Snapshot(self.domain)
+
+    def screenshot(self) -> bytes:
+        assert self.conn is not None and self.domain is not None
+        stream = self.conn.newStream()
+
+        self.domain.screenshot(stream, 0)
+
+        data = b""
+        while chunk := stream.recv(65536):
+            data += chunk
+
+        stream.finish()
+
+        return data
+
+    def press(self, keys: list[str], holdtime: int = 100):
+        assert self.domain is not None
+
+        self.domain.sendKey(
+            0, holdtime, [LINUX_CODESET[key.upper()] for key in keys], len(keys)
+        )
 
     def add_interface(self, interface: Interface) -> None:
         assert (
@@ -262,24 +433,39 @@ class Machine:
 @contextmanager
 def tmp_dir_path() -> Generator[Path]:
     with tempfile.TemporaryDirectory() as tmpdir:
-        yield Path(tmpdir)
+        p = Path(tmpdir)
+        p.chmod(0o777)
+        yield p
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
-    disk = Disk(Path("fun.qcow2"))
+    disk = Disk(Path("/machines/fun.qcow2"))
 
     with tmp_dir_path() as d:
         clone = LinkedCloneDisk(disk, d / "disk.qcow2")
+        vars = d / "vars.fd"
+        subprocess.run(
+            [
+                "qemu-img",
+                "convert",
+                "-f",
+                "raw",
+                "-O",
+                "qcow2",
+                "/usr/share/AAVMF/AAVMF_VARS.fd",
+                vars,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True,
+        )
 
         with (
-            Connection(),
+            Connection("qemu:///system"),
             Network() as n,
-            Machine(
-                interfaces=[Interface(n)],
-                disks=[clone],
-            ) as m,
+            Machine(interfaces=[Interface(n)], disks=[clone], nvram=vars) as m,
         ):
             print(m)
             IPython.embed(colors="linux")
