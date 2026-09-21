@@ -1,0 +1,3 @@
+<interface type="network">
+  <model type="virtio" />
+</interface>

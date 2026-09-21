@@ -1,0 +1,5 @@
+<disk device="disk" type="file">
+  <source file="/fake/cwd/somewhere" />
+  <driver name="qemu" type="qcow2" />
+  <target dev="sda" />
+</disk>

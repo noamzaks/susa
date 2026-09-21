@@ -1,0 +1,3 @@
+<disk device="disk" type="file">
+  <target dev="sda" />
+</disk>

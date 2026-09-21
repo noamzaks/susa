@@ -23,3 +23,5 @@ jobs:
               run: uv sync --locked
             - name: Run pre-commit
               run: uv run pre-commit run --show-diff-on-failure --color=always --all-files
+            - name: Run pytest
+              run: uv run pytest -n 32
