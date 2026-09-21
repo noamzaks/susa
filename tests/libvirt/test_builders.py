@@ -6,6 +6,7 @@ from susa.libvirt.builders import (
     DomainBuilder,
     InterfaceBuilder,
     NetworkBuilder,
+    SnapshotBuilder,
 )
 from susa.utilities import GIGA
 
@@ -30,9 +31,26 @@ def test_disk_builder_empty(snapshot: Snapshot) -> None:
     snapshot.assert_match(xml, "disk.xml")
 
 
-@pytest.mark.parametrize("arch", ("x86_64", "aarch64"))
+def test_snapshot_builder_empty(snapshot: Snapshot) -> None:
+    xml = SnapshotBuilder("test").build()
+    snapshot.assert_match(xml, "snapshot.xml")
+
+
+@pytest.mark.parametrize(
+    "arch", ("x86_64", "aarch64", "mips", "ppc64le", "armv7l", "riscv64")
+)
 def test_domain_builder_default(snapshot: Snapshot, arch: str) -> None:
-    xml = DomainBuilder("test").arch(arch).default().build()
+    disk_xml = DiskBuilder().source("somewhere").build()
+    xml = DomainBuilder("test").arch(arch).default().disk(disk_xml).build()
+    snapshot.assert_match(xml, "domain.xml")
+
+
+@pytest.mark.parametrize(
+    "arch", ("x86_64", "aarch64", "mips", "ppc64le", "armv7l", "riscv64")
+)
+def test_domain_builder_default_interface(snapshot: Snapshot, arch: str) -> None:
+    network_xml = NetworkBuilder("test").default().build()
+    xml = DomainBuilder("test").arch(arch).default().interface(network_xml).build()
     snapshot.assert_match(xml, "domain.xml")
 
 
@@ -67,6 +85,7 @@ def test_domain_builder_full(snapshot: Snapshot) -> None:
         .memory(4 * GIGA)
         .cpu(2)
         .efi("loader", "nvram")
+        .kernel("vmlinux", "initrd.gz", "console=ttyS0 root=/dev/sda1")
         .interface(network_xml)
         .disk(disk_xml)
         .disk(disk_xml)

@@ -1,26 +1,22 @@
 <domain type="qemu">
   <name>test</name>
-  <cpu mode="maximum" />
   <os>
-    <type arch="aarch64" machine="virt">hvm</type>
+    <type arch="mips" machine="malta">hvm</type>
   </os>
-  <features>
-    <acpi />
-    <gic version="3" />
-  </features>
   <devices>
     <disk device="disk" type="file">
       <source file="/fake/cwd/somewhere" />
       <driver name="qemu" type="qcow2" />
-      <target dev="vda" bus="virtio" />
+      <target dev="hda" bus="ide" />
     </disk>
-    <controller index="0" type="pci" model="pcie-root" />
-    <controller index="0" type="usb" model="qemu-xhci" />
+    <controller index="0" type="usb">
+      <address type="pci" domain="0" bus="0" slot="11" function="0" />
+    </controller>
     <input type="tablet" bus="usb" />
     <input type="keyboard" bus="usb" />
     <graphics type="vnc" port="-1" />
     <video>
-      <model type="virtio" />
+      <model type="cirrus" />
     </video>
     <console type="pty">
       <target type="serial" />

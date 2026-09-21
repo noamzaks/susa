@@ -1,13 +1,21 @@
-<domain type="kvm">
+<domain type="qemu">
   <name>test</name>
-  <cpu mode="host-passthrough" check="none" migratable="on" />
   <os>
-    <type arch="x86_64" machine="pc">hvm</type>
+    <type arch="x86_64" machine="q35">hvm</type>
   </os>
+  <features>
+    <apic />
+    <acpi />
+  </features>
   <devices>
+    <disk device="disk" type="file">
+      <source file="/fake/cwd/somewhere" />
+      <driver name="qemu" type="qcow2" />
+      <target dev="sda" bus="sata" />
+    </disk>
     <controller index="0" type="pci" model="pcie-root" />
     <controller index="0" type="usb" />
-    <input type="mouse" bus="usb" />
+    <input type="tablet" bus="usb" />
     <input type="keyboard" bus="usb" />
     <graphics type="vnc" port="-1" />
     <video>

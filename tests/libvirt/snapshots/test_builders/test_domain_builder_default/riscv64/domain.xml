@@ -1,12 +1,10 @@
 <domain type="qemu">
   <name>test</name>
-  <cpu mode="maximum" />
   <os>
-    <type arch="aarch64" machine="virt">hvm</type>
+    <type arch="riscv64" machine="virt">hvm</type>
   </os>
   <features>
     <acpi />
-    <gic version="3" />
   </features>
   <devices>
     <disk device="disk" type="file">

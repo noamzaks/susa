@@ -1,3 +1,4 @@
 <domain type="qemu">
   <name>test</name>
+  <devices />
 </domain>
