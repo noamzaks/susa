@@ -1,0 +1,27 @@
+<domain type="qemu">
+  <name>test</name>
+  <os>
+    <type arch="riscv64" machine="virt">hvm</type>
+  </os>
+  <features>
+    <acpi />
+  </features>
+  <devices>
+    <controller index="0" type="pci" model="pcie-root" />
+    <controller index="0" type="usb" model="qemu-xhci" />
+    <interface type="network">
+      <source network="test" />
+      <mac address="52:54:00:12:34:56" />
+      <model type="virtio" />
+    </interface>
+    <input type="tablet" bus="usb" />
+    <input type="keyboard" bus="usb" />
+    <graphics type="vnc" port="-1" />
+    <video>
+      <model type="virtio" />
+    </video>
+    <console type="pty">
+      <target type="serial" />
+    </console>
+  </devices>
+</domain>

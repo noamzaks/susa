@@ -1,0 +1,4 @@
+<interface type="network">
+  <mac address="52:54:00:12:34:56" />
+  <model type="virtio" />
+</interface>

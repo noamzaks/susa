@@ -678,9 +678,11 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "libvirt-python" },
+    { name = "pexpect" },
     { name = "pydantic" },
     { name = "pydantic-libvirt" },
     { name = "pydantic-xml" },
+    { name = "typing-extensions" },
 ]
 
 [package.dev-dependencies]
@@ -692,14 +694,17 @@ dev = [
     { name = "pytest-snapshot" },
     { name = "pytest-xdist" },
     { name = "ruff" },
+    { name = "types-pexpect" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "libvirt-python", specifier = ">=12.6.0" },
+    { name = "pexpect", specifier = ">=4.9.0" },
     { name = "pydantic", specifier = ">=2.13.4" },
     { name = "pydantic-libvirt", git = "https://github.com/noamzaks/pydantic-libvirt" },
     { name = "pydantic-xml", specifier = ">=2.21.1" },
+    { name = "typing-extensions", specifier = ">=4.16.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -711,6 +716,7 @@ dev = [
     { name = "pytest-snapshot", specifier = ">=0.9.0" },
     { name = "pytest-xdist", specifier = ">=3.8.0" },
     { name = "ruff", specifier = ">=0.16.3" },
+    { name = "types-pexpect", specifier = ">=4.9.0.20260518" },
 ]
 
 [[package]]
@@ -720,6 +726,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/2c/2e/a7fbfe268c8a3b32546930c0297c101d65a4a14c304ad5790a9f478f0e4e/traitlets-5.16.1.tar.gz", hash = "sha256:ed900c2b631aa3a112811139fa97b8d2c3bad5e989656bba4b7e52c7852c18c1", size = 166137, upload-time = "2026-08-03T08:32:36.848Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ad/66/0d785f0bc5e4315a96c989bb476d0fc07ea4f85132550c7b156ca2035d52/traitlets-5.16.1-py3-none-any.whl", hash = "sha256:f775618166caa0396c8e337099240f2bd3e5e917d203b2e6fbe21a58d3cb1f6b", size = 86211, upload-time = "2026-08-03T08:32:34.48Z" },
+]
+
+[[package]]
+name = "types-pexpect"
+version = "4.9.0.20260518"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ee/84/c52c4841aeaf1d56551f14335ca99a40e7e04b4f8358b402115910828e8e/types_pexpect-4.9.0.20260518.tar.gz", hash = "sha256:38c373798209428dd90988b6fd4b8839c68c7e3ed79215f1ab11fa42d7ff9427", size = 13568, upload-time = "2026-05-18T06:03:35.378Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/01/11/17b1da645d5f2a12e4db83ae38dbb732fbac96fb3bd7416635c844f7d24e/types_pexpect-4.9.0.20260518-py3-none-any.whl", hash = "sha256:bf2422e825e4efe29cc4a1b7bdc3c375ae97d9c3046ce6b2018c100fb049c262", size = 17087, upload-time = "2026-05-18T06:03:34.14Z" },
 ]
 
 [[package]]

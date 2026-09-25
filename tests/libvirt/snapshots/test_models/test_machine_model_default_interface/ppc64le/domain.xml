@@ -1,0 +1,23 @@
+<domain type="qemu">
+  <name>test</name>
+  <os>
+    <type arch="ppc64le" machine="pseries">hvm</type>
+  </os>
+  <devices>
+    <controller index="0" type="usb" />
+    <interface type="network">
+      <source network="test" />
+      <mac address="52:54:00:12:34:56" />
+      <model type="e1000" />
+    </interface>
+    <input type="tablet" bus="usb" />
+    <input type="keyboard" bus="usb" />
+    <graphics type="vnc" port="-1" />
+    <video>
+      <model type="vga" />
+    </video>
+    <console type="pty">
+      <target type="serial" />
+    </console>
+  </devices>
+</domain>

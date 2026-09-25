@@ -1,8 +1,31 @@
-from abc import ABC
+import threading
 from types import TracebackType
-from typing import Self
 
 import libvirt as lv
+
+_event_loop_lock = threading.Lock()
+_event_loop_started = False
+
+
+def _run_event_loop() -> None:
+    while True:
+        lv.virEventRunDefaultImpl()
+
+
+def start_event_loop() -> None:
+    """Run libvirt's default event loop in a background thread (once per process). It has to be registered
+    before connections are opened, and without it streams (e.g. serial consoles) never receive data."""
+    global _event_loop_started
+
+    with _event_loop_lock:
+        if _event_loop_started:
+            return
+
+        lv.virEventRegisterDefaultImpl()
+        threading.Thread(
+            target=_run_event_loop, name="libvirt-events", daemon=True
+        ).start()
+        _event_loop_started = True
 
 
 class Connection:
@@ -16,10 +39,12 @@ class Connection:
         if self.conn is not None:
             raise ValueError("Cannot open an already opened connection!")
 
+        start_event_loop()
+        self.conn = lv.open(self.uri)
+
         if Connection._current is None:
             Connection._current = self
 
-        self.conn = lv.open(self.uri)
         return self.conn
 
     def __exit__(

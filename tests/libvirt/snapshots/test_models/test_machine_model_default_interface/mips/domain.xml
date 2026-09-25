@@ -1,0 +1,26 @@
+<domain type="qemu">
+  <name>test</name>
+  <os>
+    <type arch="mips" machine="malta">hvm</type>
+  </os>
+  <devices>
+    <controller index="0" type="usb">
+      <address type="pci" domain="0" bus="0" slot="11" function="0" />
+    </controller>
+    <interface type="network">
+      <source network="test" />
+      <mac address="52:54:00:12:34:56" />
+      <model type="e1000" />
+      <address type="pci" domain="0" bus="0" slot="12" function="0" />
+    </interface>
+    <input type="tablet" bus="usb" />
+    <input type="keyboard" bus="usb" />
+    <graphics type="vnc" port="-1" />
+    <video>
+      <model type="cirrus" />
+    </video>
+    <console type="pty">
+      <target type="serial" />
+    </console>
+  </devices>
+</domain>

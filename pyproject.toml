@@ -1,7 +1,7 @@
 [project]
 name = "susa"
 version = "0.1.0"
-description = "Add your description here"
+description = "SUSA Unified Systems API - programmatically work with machines"
 readme = "README.md"
 authors = [
     { name = "Noam Zaks", email = "noam@noamzaks.com" }
@@ -9,13 +9,12 @@ authors = [
 requires-python = ">=3.14"
 dependencies = [
     "libvirt-python>=12.6.0",
+    "pexpect>=4.9.0",
     "pydantic>=2.13.4",
     "pydantic-libvirt",
     "pydantic-xml>=2.21.1",
+    "typing-extensions>=4.16.0",
 ]
-
-[project.scripts]
-susa = "susa:main"
 
 [build-system]
 requires = ["uv_build>=0.11.7,<0.12.0"]
@@ -26,8 +25,16 @@ pydantic-libvirt = { git = "https://github.com/noamzaks/pydantic-libvirt" }
 
 [tool.mypy]
 strict = true
+files = ["src", "tests"]
+enable_error_code = ["explicit-override"]
 follow_untyped_imports = true
 untyped_calls_exclude = ["IPython"]
+
+[tool.pytest.ini_options]
+addopts = ["--dist", "loadgroup"]
+
+[tool.ruff]
+ignore = ["UP035"]
 
 [dependency-groups]
 dev = [
@@ -38,4 +45,5 @@ dev = [
     "pytest-snapshot>=0.9.0",
     "pytest-xdist>=3.8.0",
     "ruff>=0.16.3",
+    "types-pexpect>=4.9.0.20260518",
 ]
