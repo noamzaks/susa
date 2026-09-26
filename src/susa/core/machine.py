@@ -1,9 +1,33 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 from susa.core.interface import Interface
 from susa.core.resource import Resource
-from susa.core.stream import Stream
+from susa.core.stream import InputOutputStream
+
+
+class Machine(Resource):
+    @property
+    @abstractmethod
+    def name(self) -> str: ...
+
+    @property
+    @abstractmethod
+    def interfaces(self) -> list[Interface]: ...
+
+    @property
+    def ips(self) -> list[str]:
+        return [
+            interface.ip for interface in self.interfaces if interface.ip is not None
+        ]
+
+    @property
+    def ip(self) -> str:
+        ips = self.ips
+        assert len(ips) != 0
+        return ips[0]
 
 
 class Snapshot(Resource):
@@ -59,15 +83,8 @@ class Screenshottable(ABC):
     def screenshot(self) -> Screenshot: ...
 
 
-class Serial(Resource):
+class Serial(Resource, InputOutputStream):
     """A connection to a machine's serial console. Output from before it's created is not available."""
-
-    @property
-    @abstractmethod
-    def output(self) -> Stream: ...
-
-    @abstractmethod
-    def write(self, data: bytes) -> None: ...
 
 
 class SerialAccessible(ABC):
@@ -77,25 +94,3 @@ class SerialAccessible(ABC):
     def serial(self) -> Serial:
         """A new, already created, connection to the serial console. Destroy it when done (or use it in a `with`
         block)."""
-
-
-class Machine(Resource):
-    @property
-    @abstractmethod
-    def name(self) -> str: ...
-
-    @property
-    @abstractmethod
-    def interfaces(self) -> list[Interface]: ...
-
-    @property
-    def ips(self) -> list[str]:
-        return [
-            interface.ip for interface in self.interfaces if interface.ip is not None
-        ]
-
-    @property
-    def ip(self) -> str:
-        ips = self.ips
-        assert len(ips) != 0
-        return ips[0]

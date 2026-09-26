@@ -1,6 +1,7 @@
-from typing import Self
+from __future__ import annotations
 
 import pydantic_libvirt.domain as lvdomain
+from typing_extensions import Self
 
 from susa.libvirt.arch import ARCH_DEFAULTS
 from susa.libvirt.model import Model

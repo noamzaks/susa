@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import libvirt as lv
 from typing_extensions import override
 

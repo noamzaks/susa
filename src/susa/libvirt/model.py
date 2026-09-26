@@ -1,11 +1,16 @@
+from __future__ import annotations
+
 import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
-from typing import ClassVar, Self, cast
+from typing import ClassVar, Generic, TypeVar, cast
 
 import pydantic_xml
+from typing_extensions import Self
+
+T = TypeVar("T", bound=pydantic_xml.BaseXmlModel)
 
 
-class Model[T: pydantic_xml.BaseXmlModel](ABC):
+class Model(ABC, Generic[T]):
     xml_model: T
     xml_model_type: ClassVar[type[pydantic_xml.BaseXmlModel]]
 

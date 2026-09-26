@@ -1,32 +1,10 @@
+from __future__ import annotations
+
 from typing_extensions import override
 
-from susa.communicator.shell import Child, Prelude, QuietSpawn, ShellCommunicator
+from susa.communicator.shell import Prelude, ShellCommunicator
+from susa.communicator.terminal import StreamTerminal, Terminal
 from susa.core.machine import Serial
-
-
-class SerialSpawn(QuietSpawn):
-    def __init__(self, serial: Serial, timeout: float = 30) -> None:
-        super().__init__(timeout=timeout)
-        self.serial = serial
-
-    @override
-    def read_nonblocking(self, size: int = 1, timeout: float | None = None) -> bytes:
-        if timeout is None or timeout == -1:
-            timeout = self.timeout or 0
-        return self.serial.output.read(size, timeout)
-
-    def send(self, s: bytes) -> int:
-        self.serial.write(s)
-        return len(s)
-
-    def sendline(self, s: bytes = b"") -> int:
-        return self.send(s + b"\r")
-
-    def sendintr(self) -> None:
-        self.send(b"\x03")
-
-    def close(self) -> None:
-        self.serial.destroy()
 
 
 class SerialCommunicator(ShellCommunicator):
@@ -37,5 +15,10 @@ class SerialCommunicator(ShellCommunicator):
         self.serial = serial
 
     @override
-    def spawn(self) -> Child:
-        return SerialSpawn(self.serial)
+    def open_terminal(self) -> Terminal:
+        return StreamTerminal(self.serial)
+
+    @override
+    def destroy(self) -> None:
+        super().destroy()
+        self.serial.destroy()

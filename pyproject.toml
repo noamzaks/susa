@@ -6,7 +6,7 @@ readme = "README.md"
 authors = [
     { name = "Noam Zaks", email = "noam@noamzaks.com" }
 ]
-requires-python = ">=3.14"
+requires-python = ">=3.10"
 dependencies = [
     "libvirt-python>=12.6.0",
     "pexpect>=4.9.0",
@@ -28,7 +28,6 @@ strict = true
 files = ["src", "tests"]
 enable_error_code = ["explicit-override"]
 follow_untyped_imports = true
-untyped_calls_exclude = ["IPython"]
 
 [tool.pytest.ini_options]
 addopts = ["--dist", "loadgroup"]
@@ -38,7 +37,6 @@ ignore = ["UP035"]
 
 [dependency-groups]
 dev = [
-    "ipython>=9.16.1",
     "mypy>=2.3.0",
     "pre-commit>=4.6.2",
     "pytest>=9.1.1",

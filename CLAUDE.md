@@ -10,7 +10,8 @@ architectures (x86_64, aarch64, mips, ppc64le, armv7l, riscv64, i686), mostly em
 
 ## Commands
 
-This project uses `uv` (Python 3.14, see `.python-version`).
+This project uses `uv`. It supports Python 3.10+, and 3.10 is the default (`.python-version`, which CI also
+uses), so the default environment catches anything newer.
 
 - Install/sync dependencies: `uv sync` (building `libvirt-python` needs `pkg-config` and the libvirt dev headers)
 - Lint / format: `uv run ruff check`, `uv run ruff format`
@@ -25,7 +26,7 @@ This project uses `uv` (Python 3.14, see `.python-version`).
   `tests/libvirt/snapshots/`)
 - Real-VM tests: `uv run pytest tests/libvirt/test_machine.py -n 3`. Each architecture boots once (twice,
   counting the power cycle). They need a reachable `qemu:///system`, and skip an architecture whose image is
-  missing. Each architecture is its own `xdist_group` (a mark on the `machine` fixture's params, with
+  missing. Each architecture is its own `xdist_group` (a mark on the `base_machine` fixture's params, with
   `--dist loadgroup` in `pyproject.toml`), so `-n` runs whole architectures in parallel. Keep `-n` at about
   3: each guest has 2 GB, and many TCG guests at once starve the 6-core host and cause timeouts. Because
   of that addopt, don't pass `-p no:xdist` (pytest would reject `--dist`).
@@ -42,8 +43,10 @@ Two layers:
   - `Powerable` (`is_powered_on`; `power_on`/`power_off`/`reset` are immediate; `shutdown`/`reboot` ask
     the guest)
   - `Screenshottable` (a `Screenshot` of bytes plus an optional MIME type)
-  - `SerialAccessible` (`serial()` returns an already created `Serial` resource, whose `output` is a
-    `Stream` (from `core/stream.py`: `read(size, timeout)` and `read_until`), plus `write`)
+  - `SerialAccessible` (`serial()` returns an already created `Serial`, which is a `Resource` and an
+    `InputOutputStream`)
+  - `core/stream.py` has `OutputStream` (`read(size, timeout)` and `read_until`), `InputStream` (`write`)
+    and `InputOutputStream`
 - **`susa.libvirt`** implements them as `LVMachine` (all of the machine mixins), `LVNetwork`, `LVSnapshot`,
   `LVSerial` and `LVInterface`.
 
@@ -71,20 +74,23 @@ the console pty is only accessible to the `qemu` user, so it can't be opened dir
 ### Communicators
 
 `susa.core.communicator` defines three classes. Everything is `bytes`:
-- **`CommandRunner`**: `run(command) -> CommandResult(stdout, stderr, exit_code)`, and `check`, which
-  returns stdout and raises on failure.
-- **`AsyncCommandRunner`**: adds `start(command) -> Process`, whose `stdout` and `stderr` are `Stream`s,
-  plus `poll`, `wait` (returns the exit code) and `kill`. Its default `run` is `start`, then `wait`, then
-  read both streams.
+- **`CommandRunner`**: `run(command) -> subprocess.CompletedProcess[bytes]`, and `check`, which returns stdout
+  and raises `CalledProcessError` on failure.
+- **`AsyncCommandRunner`**: adds `start(command) -> AsyncCommand`, whose `stdout` and `stderr` are
+  `OutputStream`s, plus `poll`, `wait` (returns the exit code) and `kill`. Its default `run` is `start`, then
+  `wait`, then read both streams.
 - **`FileTransferrer`**: a separate `upload`/`download` mixin.
 
-In `susa.communicator`, `ShellCommunicator` (an `AsyncCommandRunner` and a `FileTransferrer`) drives a POSIX
-shell with pexpect in bytes mode over any `Child`: `pexpect.spawn` for `SSHCommunicator`, and a `SpawnBase`
-adapter over a `core.Serial` for `SerialCommunicator`. It must work with non-bash shells too (e.g. FreeBSD's
-`/bin/sh`), so keep shell snippets minimal and POSIX.
-- **Quiet:** `Child.is_quiet(duration)` (from the `QuietSpawn` mixin; `Spawn` is `pexpect.spawn` plus it)
-  reports whether nothing arrives for that long, discarding whatever does. `wait_until_quiet` is the generic
-  "the other side is done talking" signal, used in place of matching specific prompts.
+`susa.communicator` has two layers:
+- **`terminal.py`:** the pexpect layer. A `Terminal` protocol, with `is_quiet(duration)` and
+  `wait_until_quiet` from the `QuietSpawn` mixin. `ProcessTerminal` is a local process in a pty (used for
+  `ssh`), and `StreamTerminal` works over any `InputOutputStream` (e.g. a `Serial`).
+- **`shell.py`:** `ShellCommunicator` (an `AsyncCommandRunner` and a `FileTransferrer`) drives a POSIX shell
+  over a `Terminal` from its abstract `open_terminal()`. `SSHCommunicator` and `SerialCommunicator` just
+  open theirs. It must work with non-bash shells too (e.g. FreeBSD's `/bin/sh`), so keep shell snippets
+  minimal and POSIX. `wait_until_quiet` is the generic "the other side is done talking" signal, used in
+  place of matching specific prompts.
+
 - **Prelude:** an optional `prelude` gets the connection before it's a shell. `login(username, password)`
   sends an empty line, the username and the password, each once the connection is quiet. That's best-effort
   for any getty or login program. SSH still expects OpenSSH's `assword:` prompt, since OpenSSH discards
@@ -99,10 +105,10 @@ adapter over a `core.Serial` for `SerialCommunicator`. It must work with non-bas
   prompt, newline translation or job notification, and output is exactly what commands wrote. A retry is needed if
   login discarded part of the input; it sends Ctrl-C first to clear the line. The first attempt sends no
   Ctrl-C, since interrupting a shell that's still starting can kill it.
-- **`execute(command)`:** the one primitive. It sends the command, then `echo SUSA-EXIT-$?` on its own line.
+- **`execute(command) -> CompletedProcess`:** the one primitive (stdout and stderr combined). It sends the command, then `echo SUSA-EXIT-$?` on its own line.
   Output is everything before that marker, and the exit code is taken from it. A timeout sends Ctrl-C (which
   also discards the pending marker line), resends the marker, and raises `TimeoutError`.
-- **`start`:** `sh -c <quoted> > out 2> err < /dev/null & echo $!`, in a `mktemp -d` directory. `wait` is
+- **`start`** (returns a `ShellCommand`): `sh -c <quoted> > out 2> err < /dev/null & echo $!`, in a `mktemp -d` directory. `wait` is
   the shell's `wait <pid>`, whose status can only be collected once, so it's cached. `poll` is `kill -0`, and
   `kill` is `kill <pid>`. Streams read with `tail -c +N | head -c SIZE`.
 - **Transfer:** `upload` is POSIX `printf` with octal escapes, in lines chained with `&&` and short enough
@@ -140,16 +146,22 @@ with reserved IPs.
 - `tests/libvirt/test_machine.py` holds the machine definitions (`ARCHITECTURES`, `DISKS`, firmware and
   kernel paths): the Debian images, plus FreeBSD 15.1 and 10.4 x86_64 (`freebsd`/`freebsd10`, booted with
   BIOS). The FreeBSD images use FreeBSD's `/bin/sh` rather than bash, to keep the shell communicator
-  portable. See `/machines/susa-notes/freebsd.md` for how they were built. A module-scoped `machine` fixture, parametrized by architecture, boots each real
-  Debian image from `/machines` on `qemu:///system` once and waits up to 120 s for ping. The ping,
-  screenshot, serial-login, communicator (`uname -m`, exit codes, file transfer over serial and SSH) and
-  power-cycle tests then share it. The power-cycle test must stay last,
-  since it reboots the machine. The images have sshd enabled and users `root` and `user`, both with password
+  portable. See `/machines/susa-notes/freebsd.md` for how they were built. A module-scoped `base_machine` fixture, parametrized by architecture, boots each image
+  from `/machines` on `qemu:///system` once. It waits up to 120 s for ping and then for a serial `login:`
+  prompt. The `ready` fixture then snapshots it, and the function-scoped `machine` fixture reverts to that
+  snapshot after every test, so tests are independent (e.g. the power cycle can run anywhere). The Debian images that boot through GRUB have `GRUB_TIMEOUT=0`. The images have sshd enabled and users `root` and `user`, both with password
   `a`. It needs UEFI firmware for x86_64/aarch64 (`/usr/share/OVMF`, `/usr/share/AAVMF`), and the external
   kernels/initrds under `/machines/debian-*-boot`. Disk clones go through `LinkedClone` in a `0o777` temp
   dir (`susa.tmp_dir_path()`), so the QEMU process, running as another user, can read them.
 
 ## Conventions
+
+- Code must run on Python 3.10:
+  - Every module starts with `from __future__ import annotations` (after any docstring), since forward
+    references are otherwise evaluated eagerly.
+  - Generics use `TypeVar`/`Generic`, not PEP 695 (`class C[T]` or `type X = ...`).
+  - Type aliases use `TypeAlias`.
+  - `Self` and `override` come from `typing_extensions`.
 
 - Mark every overriding method with `@override`, imported from `typing_extensions`. mypy's `explicit-override`
   check is enabled, so a missing one fails type-checking.

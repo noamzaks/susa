@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from types import TracebackType
-from typing import Self
+
+from typing_extensions import Self
 
 
 class Resource(ABC):

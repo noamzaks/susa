@@ -1,10 +1,12 @@
+from __future__ import annotations
+
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any, Self, cast
+from typing import Any, cast
 
 import pydantic_libvirt.domain as lvdomain
 import pydantic_libvirt.domainsnapshot as lvdomainsnapshot
-from typing_extensions import override
+from typing_extensions import Self, override
 
 from susa.libvirt.arch import ARCH_DEFAULTS, have_kvm
 from susa.libvirt.disk_model import DiskModel

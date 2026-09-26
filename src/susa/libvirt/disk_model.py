@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 from pathlib import Path
-from typing import Any, Self, cast
+from typing import Any, cast
 
 import pydantic_libvirt.domain as lvdomain
+from typing_extensions import Self
 
 from susa.libvirt.model import Model
 

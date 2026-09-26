@@ -1,11 +1,14 @@
+from __future__ import annotations
+
 import random
 from pathlib import Path
+from subprocess import CalledProcessError, CompletedProcess
 
 import pytest
 from typing_extensions import override
 
-from susa.communicator.shell import Child, Prelude, ShellCommunicator, Spawn
-from susa.core.communicator import CommandResult
+from susa.communicator.shell import Prelude, ShellCommunicator
+from susa.communicator.terminal import ProcessTerminal, Terminal
 
 SHELLS = {
     "bash": ["bash", "--norc", "--noprofile", "-i"],
@@ -15,17 +18,21 @@ SHELLS = {
 
 class LocalShell(ShellCommunicator):
     def __init__(self, argv: list[str], prelude: Prelude | None = None) -> None:
-        super().__init__(prelude)
+        super().__init__(prelude, quiet_time=1)
         self.argv = argv
 
     @override
-    def spawn(self) -> Child:
-        return Spawn(self.argv[0], self.argv[1:])
+    def open_terminal(self) -> Terminal:
+        return ProcessTerminal(*self.argv)
 
 
 @pytest.fixture(params=list(SHELLS))
 def shell(request: pytest.FixtureRequest) -> LocalShell:
     return LocalShell(SHELLS[request.param])
+
+
+def result(result: CompletedProcess[bytes]) -> tuple[int, bytes, bytes | None]:
+    return result.returncode, result.stdout, result.stderr
 
 
 def assert_gone(shell: ShellCommunicator, pattern: str) -> None:
@@ -37,53 +44,58 @@ def assert_gone(shell: ShellCommunicator, pattern: str) -> None:
 
 def test_run(shell: LocalShell) -> None:
     with shell:
-        assert shell.run("echo a; echo b >&2; exit 3") == CommandResult(
-            b"a\n", b"b\n", 3
-        )
-        assert shell.run("printf 'x\\000\\377\\r\\n'") == CommandResult(
-            b"x\x00\xff\r\n", b"", 0
+        assert result(shell.run("echo a; echo b >&2; exit 3")) == (3, b"a\n", b"b\n")
+        assert result(shell.run("printf 'x\\000\\377\\r\\n'")) == (
+            0,
+            b"x\x00\xff\r\n",
+            b"",
         )
         assert shell.check("printf 7") == b"7"
-        with pytest.raises(RuntimeError, match="failed with 3"):
-            shell.check("exit 3")
+        with pytest.raises(CalledProcessError) as error:
+            shell.check("echo oops >&2; exit 3")
+        assert (error.value.returncode, error.value.stderr) == (3, b"oops\n")
 
 
 def test_execute(shell: LocalShell) -> None:
     with shell:
-        assert shell.execute("cd /tmp; pwd; false") == (b"/tmp\n", 1)
-        assert shell.execute("pwd") == (b"/tmp\n", 0)
+        assert result(shell.execute("cd /tmp; pwd; echo e >&2; false")) == (
+            1,
+            b"/tmp\ne\n",
+            None,
+        )
+        assert shell.execute("pwd").stdout == b"/tmp\n"
         with pytest.raises(TimeoutError):
             shell.execute("sleep 5", timeout=0.5)
-        assert shell.execute("echo still usable") == (b"still usable\n", 0)
+        assert shell.execute("echo still usable").stdout == b"still usable\n"
 
 
 def test_start(shell: LocalShell) -> None:
     with shell:
-        process = shell.start("echo first; echo oops >&2; sleep 1; printf last; exit 4")
-        assert process.poll() is None
-        assert process.stdout.read(timeout=5) == b"first\n"
-        assert process.stderr.read(timeout=5) == b"oops\n"
-        assert process.stdout.read() == b""
-        assert process.wait() == 4
-        assert process.poll() == 4
-        assert process.stdout.read() == b"last"
+        command = shell.start("echo first; echo oops >&2; sleep 1; printf last; exit 4")
+        assert command.poll() is None
+        assert command.stdout.read(timeout=5) == b"first\n"
+        assert command.stderr.read(timeout=5) == b"oops\n"
+        assert command.stdout.read() == b""
+        assert command.wait() == 4
+        assert command.poll() == 4
+        assert command.stdout.read() == b"last"
 
 
 def test_start_read_size(shell: LocalShell) -> None:
     with shell:
-        process = shell.start("printf 0123456789")
-        process.wait()
-        assert process.stdout.read(4) == b"0123"
-        assert process.stdout.read_until(b"9", timeout=5) == b"456789"
+        command = shell.start("printf 0123456789")
+        command.wait()
+        assert command.stdout.read(4) == b"0123"
+        assert command.stdout.read_until(b"9", timeout=5) == b"456789"
 
 
 def test_start_kill(shell: LocalShell) -> None:
     with shell:
-        process = shell.start("exec sleep 3601")
+        command = shell.start("exec sleep 3601")
         with pytest.raises(TimeoutError):
-            process.wait(timeout=0.5)
-        process.kill()
-        assert process.wait(timeout=5) == 128 + 15
+            command.wait(timeout=0.5)
+        command.kill()
+        assert command.wait(timeout=5) == 128 + 15
         assert_gone(shell, "sleep 3601")
 
 
@@ -95,11 +107,11 @@ def test_run_timeout_kills(shell: LocalShell) -> None:
 
 
 def test_prelude() -> None:
-    def prelude(child: Child) -> None:
-        child.sendline(b"cd /tmp")
+    def prelude(terminal: Terminal) -> None:
+        terminal.sendline(b"cd /tmp")
 
     with LocalShell(SHELLS["bash"], prelude) as shell:
-        assert shell.execute("pwd") == (b"/tmp\n", 0)
+        assert shell.execute("pwd").stdout == b"/tmp\n"
 
 
 def test_transfer(shell: LocalShell, tmp_path: Path) -> None:

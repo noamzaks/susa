@@ -1,8 +1,10 @@
+from __future__ import annotations
+
 import time
 from abc import ABC, abstractmethod
 
 
-class Stream(ABC):
+class OutputStream(ABC):
     @abstractmethod
     def read(self, size: int | None = None, timeout: float = 0) -> bytes:
         """Read up to `size` bytes (everything available if `size` is `None`), waiting up to `timeout` seconds for
@@ -22,3 +24,12 @@ class Stream(ABC):
                 )
             result += self.read(timeout=remaining)
         return result
+
+
+class InputStream(ABC):
+    @abstractmethod
+    def write(self, data: bytes) -> None: ...
+
+
+class InputOutputStream(OutputStream, InputStream):
+    pass

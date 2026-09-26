@@ -1,10 +1,12 @@
+from __future__ import annotations
+
 import pytest
 from typing_extensions import override
 
-from susa.core.stream import Stream
+from susa.core.stream import OutputStream
 
 
-class FakeStream(Stream):
+class FakeStream(OutputStream):
     def __init__(self, *chunks: bytes) -> None:
         self.chunks = list(chunks)
 

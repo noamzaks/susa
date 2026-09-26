@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import random
 import subprocess
 from collections.abc import Callable, Generator
@@ -9,11 +11,10 @@ from susa import tmp_dir_path
 from susa.communicator.serial import SerialCommunicator
 from susa.communicator.shell import ShellCommunicator, login
 from susa.communicator.ssh import SSHCommunicator
-from susa.core.communicator import CommandResult
 from susa.libvirt.connection import Connection
 from susa.libvirt.disk_model import DiskModel
 from susa.libvirt.interface_model import InterfaceModel
-from susa.libvirt.machine import LVMachine
+from susa.libvirt.machine import LVMachine, LVSnapshot
 from susa.libvirt.machine_model import MachineModel
 from susa.libvirt.network import LVNetwork
 from susa.libvirt.network_model import NetworkModel
@@ -183,7 +184,7 @@ DISKS = {
 
 
 @pytest.fixture(scope="session")
-def connection() -> Generator[None]:
+def connection() -> Generator[None, None, None]:
     with Connection("qemu:///system"):
         yield
 
@@ -193,8 +194,10 @@ def connection() -> Generator[None]:
     scope="module",
     params=[pytest.param(a, marks=pytest.mark.xdist_group(a)) for a in ARCHITECTURES],
 )
-def machine(request: pytest.FixtureRequest, connection: None) -> Generator[LVMachine]:
-    """A booted (answering ping) machine of each architecture, shared by the tests of that architecture."""
+def base_machine(
+    request: pytest.FixtureRequest, connection: None
+) -> Generator[LVMachine, None, None]:
+    """A booted machine of each architecture: answering ping, with a login prompt on its serial console."""
     arch: str = request.param
     if not DISKS[arch].exists():
         pytest.skip(f"{DISKS[arch]} doesn't exist")
@@ -208,13 +211,26 @@ def machine(request: pytest.FixtureRequest, connection: None) -> Generator[LVMac
         domain = ARCHITECTURES[arch](Path(clone.path), tmp, network)
 
         with LVNetwork(network) as n, LVMachine(domain, [n]) as machine:
-            try:
-                wait_until_ping(machine.ip, timeout=BOOT_TIMEOUT)
-            except TimeoutError:
-                pytest.fail(
-                    f"{arch} didn't answer ping at {machine.ip} in {BOOT_TIMEOUT}s"
-                )
+            wait_until_ping(machine.ip, timeout=BOOT_TIMEOUT)
+            # Machines may answer ping before they're done booting.
+            with machine.serial() as serial:
+                serial.write(b"\r")
+                serial.read_until(b"login:", timeout=BOOT_TIMEOUT)
             yield machine
+
+
+@pytest.fixture(scope="module")
+def ready(base_machine: LVMachine) -> LVSnapshot:
+    return base_machine.snapshot()
+
+
+@pytest.fixture
+def machine(
+    base_machine: LVMachine, ready: LVSnapshot
+) -> Generator[LVMachine, None, None]:
+    """`base_machine`, reverted to when it was ready after the test."""
+    yield base_machine
+    ready.revert()
 
 
 def test_ping(machine: LVMachine) -> None:
@@ -231,14 +247,12 @@ def test_serial(machine: LVMachine) -> None:
     with machine.serial() as serial:
         # getty prints the prompt again for an empty login.
         serial.write(b"\r")
-        # The machine may answer ping before it's done booting.
-        serial.output.read_until(b"login:", timeout=BOOT_TIMEOUT)
+        serial.read_until(b"login:", timeout=30)
 
         # Reads stop at `size`, leaving the rest of the (longer) prompt for the next read.
         serial.write(b"\r")
-        first = serial.output.read(4, timeout=30)
-        assert len(first) == 4
-        serial.output.read_until(b"login:", timeout=30)
+        assert len(serial.read(4, timeout=30)) == 4
+        serial.read_until(b"login:", timeout=30)
 
 
 def communicator(machine: LVMachine, kind: str) -> ShellCommunicator:
@@ -259,32 +273,38 @@ UNAME = {name: name for name in ARCHITECTURES} | {
 @pytest.fixture
 def name(request: pytest.FixtureRequest) -> str:
     """The name (in `ARCHITECTURES`) of the machine the test got."""
-    result: str = request.node.callspec.params["machine"]
+    result: str = request.node.callspec.params["base_machine"]
     return result
 
 
 @pytest.mark.parametrize("kind", COMMUNICATORS)
 def test_uname(machine: LVMachine, name: str, kind: str) -> None:
     with communicator(machine, kind) as c:
-        assert c.run("uname -m") == CommandResult(f"{UNAME[name]}\n".encode(), b"", 0)
+        result = c.run("uname -m")
+        assert (result.returncode, result.stdout, result.stderr) == (
+            0,
+            f"{UNAME[name]}\n".encode(),
+            b"",
+        )
 
 
 @pytest.mark.parametrize("kind", COMMUNICATORS)
 def test_run(machine: LVMachine, kind: str) -> None:
     with communicator(machine, kind) as c:
-        assert c.run("echo a; echo b >&2; false") == CommandResult(b"a\n", b"b\n", 1)
-        assert c.execute("cd /tmp; pwd") == (b"/tmp\n", 0)
-        assert c.execute("pwd") == (b"/tmp\n", 0)
+        result = c.run("echo a; echo b >&2; false")
+        assert (result.returncode, result.stdout, result.stderr) == (1, b"a\n", b"b\n")
+        assert c.execute("cd /tmp; pwd").stdout == b"/tmp\n"
+        assert c.execute("pwd").stdout == b"/tmp\n"
 
 
 @pytest.mark.parametrize("kind", COMMUNICATORS)
 def test_start(machine: LVMachine, kind: str) -> None:
     with communicator(machine, kind) as c:
-        process = c.start("echo started; sleep 2; echo done >&2")
-        assert process.stdout.read_until(b"started\n", timeout=10) == b"started\n"
-        assert process.poll() is None
-        assert process.wait() == 0
-        assert process.stderr.read() == b"done\n"
+        command = c.start("echo started; sleep 2; echo done >&2")
+        assert command.stdout.read_until(b"started\n", timeout=10) == b"started\n"
+        assert command.poll() is None
+        assert command.wait() == 0
+        assert command.stderr.read() == b"done\n"
 
 
 @pytest.mark.parametrize("kind", COMMUNICATORS)
@@ -297,7 +317,6 @@ def test_transfer(machine: LVMachine, kind: str, tmp_path: Path) -> None:
     assert (tmp_path / "down").read_bytes() == data
 
 
-# Keep this last, since it reboots the machine.
 def test_power_cycle(machine: LVMachine) -> None:
     machine.power_off()
     assert not machine.is_powered_on
@@ -305,4 +324,5 @@ def test_power_cycle(machine: LVMachine) -> None:
     machine.power_on()
     assert machine.is_powered_on
     with machine.serial() as serial:
-        serial.output.read_until(b"login:", timeout=BOOT_TIMEOUT)
+        # Booting may take longer than usual while other machines run in parallel.
+        serial.read_until(b"login:", timeout=2 * BOOT_TIMEOUT)

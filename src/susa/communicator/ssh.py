@@ -1,9 +1,20 @@
+from __future__ import annotations
+
 from typing_extensions import override
 
-from susa.communicator.shell import Child, Prelude, ShellCommunicator, Spawn
+from susa.communicator.shell import Prelude, ShellCommunicator
+from susa.communicator.terminal import ProcessTerminal, Terminal
+
+SSH_OPTIONS = (
+    "StrictHostKeyChecking=no",
+    "UserKnownHostsFile=/dev/null",
+    "LogLevel=ERROR",
+)
 
 
 class SSHCommunicator(ShellCommunicator):
+    """A shell over `ssh` (with a password, which OpenSSH asks for with a known prompt, or keys)."""
+
     def __init__(
         self,
         host: str,
@@ -19,25 +30,19 @@ class SSHCommunicator(ShellCommunicator):
         self.port = port
 
     @override
-    def spawn(self) -> Child:
-        options = [
-            "StrictHostKeyChecking=no",
-            "UserKnownHostsFile=/dev/null",
-            "LogLevel=ERROR",
-        ]
+    def open_terminal(self) -> Terminal:
+        options = list(SSH_OPTIONS)
         if self.password is not None:
             options.append("PreferredAuthentications=password,keyboard-interactive")
-        child = Spawn(
+        terminal = ProcessTerminal(
             "ssh",
-            [
-                "-tt",
-                "-p",
-                str(self.port),
-                *(f"-o{o}" for o in options),
-                f"{self.username}@{self.host}",
-            ],
+            "-tt",
+            f"-p{self.port}",
+            *(f"-o{o}" for o in options),
+            f"{self.username}@{self.host}",
         )
         if self.password is not None:
-            child.expect(b"assword:")
-            child.sendline(self.password.encode())
-        return child
+            # Unlike getty, ssh discards input sent before its prompt, so wait for it.
+            terminal.expect(b"assword:")
+            terminal.sendline(self.password.encode())
+        return terminal

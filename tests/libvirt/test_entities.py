@@ -1,5 +1,7 @@
 """Tests of the libvirt entities against libvirt's mock driver, which doesn't run anything."""
 
+from __future__ import annotations
+
 from collections.abc import Generator
 
 import libvirt as lv
@@ -27,7 +29,7 @@ MAC = "52:54:00:12:34:56"
 
 
 @pytest.fixture(autouse=True)
-def connection() -> Generator[None]:
+def connection() -> Generator[None, None, None]:
     with Connection("test:///default"):
         yield
 

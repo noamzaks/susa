@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 import ipaddress
-from typing import Self
 
 import pydantic_libvirt.network as lvnetwork
+from typing_extensions import Self
 
 from susa.libvirt.interface_model import InterfaceModel
 from susa.libvirt.model import Model
