@@ -20,6 +20,9 @@ from susa.libvirt.interface import LVInterface
 from susa.libvirt.machine_model import MachineModel, SnapshotModel
 from susa.libvirt.network import LVNetwork
 from susa.libvirt.serial import LVSerial
+from susa.libvirt.stream import LVStream
+
+SCREENSHOT_TIMEOUT = 60
 
 
 class LVSnapshot(LVEntity[lv.virDomainSnapshot, SnapshotModel], Snapshot):
@@ -154,11 +157,9 @@ class LVMachine(
 
     @override
     def screenshot(self) -> Screenshot:
-        stream = self.conn.newStream()
-        mime_type = self.domain.screenshot(stream, 0)
-        data = b""
-        while chunk := stream.recv(1 << 20):
-            data += chunk
+        stream = LVStream(self.conn)
+        mime_type = self.domain.screenshot(stream.stream, 0)
+        data = stream.read_all(SCREENSHOT_TIMEOUT)
         stream.finish()
         return Screenshot(data=data, mime_type=mime_type)
 

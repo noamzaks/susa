@@ -16,9 +16,4 @@ class SerialCommunicator(ShellCommunicator):
 
     @override
     def open_terminal(self) -> Terminal:
-        return StreamTerminal(self.serial)
-
-    @override
-    def destroy(self) -> None:
-        super().destroy()
-        self.serial.destroy()
+        return StreamTerminal(self.serial, close=self.serial.destroy)

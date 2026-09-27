@@ -25,6 +25,21 @@ class OutputStream(ABC):
             result += self.read(timeout=remaining)
         return result
 
+    def is_quiet(self, duration: float) -> bool:
+        """Whether nothing arrives within `duration` seconds (discarding whatever does)."""
+        return self.read(timeout=duration) == b""
+
+    def wait_until_quiet(self, quiet_time: float, timeout: float) -> None:
+        """Discard data until none arrives for `quiet_time` seconds. Raises `TimeoutError` if that doesn't happen
+        within `timeout` seconds (a quiet period that wouldn't fit in it isn't started)."""
+        deadline = time.time() + timeout
+        while deadline - time.time() >= quiet_time:
+            if self.is_quiet(quiet_time):
+                return
+        raise TimeoutError(
+            f"Wasn't quiet for {quiet_time} seconds within {timeout} seconds"
+        )
+
 
 class InputStream(ABC):
     @abstractmethod

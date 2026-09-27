@@ -30,13 +30,14 @@ UPLOAD_CHUNK_SIZE = 512
 Prelude: TypeAlias = Callable[[Terminal], None]
 
 
-def login(username: str, password: str, quiet_time: float = 3) -> Prelude:
-    """Log in (best-effort, whatever the prompts are) by sending a line to get a fresh prompt, the username and the
-    password, each once the terminal is quiet for `quiet_time` seconds. It should be longer than the login program
-    takes to prompt, since input sent before that is usually discarded."""
+def login(password: str, username: str | None = None, quiet_time: float = 3) -> Prelude:
+    """Log in (best-effort, whatever the prompts are) by sending the username (if there's one to give) and then the
+    password, each once the terminal is quiet for `quiet_time` seconds. `quiet_time` should be longer than the login
+    program takes to prompt, since input sent before that is usually discarded."""
+    lines = ([username.encode()] if username is not None else []) + [password.encode()]
 
     def prelude(terminal: Terminal) -> None:
-        for line in (b"", username.encode(), password.encode()):
+        for line in lines:
             terminal.wait_until_quiet(quiet_time, SETUP_TIMEOUT)
             terminal.sendline(line)
 

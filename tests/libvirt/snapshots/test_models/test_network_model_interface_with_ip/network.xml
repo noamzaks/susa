@@ -1,6 +1,11 @@
 <network>
   <name>test</name>
   <bridge name="test" stp="off" delay="0" />
+  <dns>
+    <host ip="10.0.0.1">
+      <hostname>host</hostname>
+    </host>
+  </dns>
   <ip address="10.0.0.1" netmask="255.255.255.0">
     <dhcp>
       <range start="10.0.0.2" end="10.0.0.254" />

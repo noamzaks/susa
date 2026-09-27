@@ -64,6 +64,16 @@ class NetworkModel(Model[lvnetwork.network]):
 
         self.xml_model.ip_list.append(ip)
 
+        # Guests can resolve the host's address (which e.g. some rlogin servers require of clients).
+        if self.xml_model.dns is None:
+            self.xml_model.dns = lvnetwork.dns(host_list=[])
+        assert self.xml_model.dns.host_list is not None
+        self.xml_model.dns.host_list.append(
+            lvnetwork.dns_host(
+                ip=address, hostname_list=[lvnetwork.hostname(value="host")]
+            )
+        )
+
         return self
 
     def nat(self) -> Self:

@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import random
+import shutil
 import subprocess
 from collections.abc import Callable, Generator
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
 from susa import tmp_dir_path
+from susa.communicator.rlogin import RloginCommunicator
 from susa.communicator.serial import SerialCommunicator
 from susa.communicator.shell import ShellCommunicator, login
 from susa.communicator.ssh import SSHCommunicator
+from susa.communicator.telnet import TelnetCommunicator
 from susa.libvirt.connection import Connection
 from susa.libvirt.disk_model import DiskModel
 from susa.libvirt.interface_model import InterfaceModel
@@ -24,6 +28,7 @@ from susa.utilities.networking import ping, wait_until_ping
 
 MACHINES = Path("/machines")
 BOOT_TIMEOUT = 120
+QUIET_TIME = 5
 
 
 def nvram(tmp: Path, vars: str) -> Path:
@@ -197,7 +202,7 @@ def connection() -> Generator[None, None, None]:
 def base_machine(
     request: pytest.FixtureRequest, connection: None
 ) -> Generator[LVMachine, None, None]:
-    """A booted machine of each architecture: answering ping, with a login prompt on its serial console."""
+    """A booted machine of each architecture: answering ping, with a quiet serial console."""
     arch: str = request.param
     if not DISKS[arch].exists():
         pytest.skip(f"{DISKS[arch]} doesn't exist")
@@ -212,10 +217,9 @@ def base_machine(
 
         with LVNetwork(network) as n, LVMachine(domain, [n]) as machine:
             wait_until_ping(machine.ip, timeout=BOOT_TIMEOUT)
-            # Machines may answer ping before they're done booting.
+            # Machines may answer ping before they're done booting, which ends with the console going quiet.
             with machine.serial() as serial:
-                serial.write(b"\r")
-                serial.read_until(b"login:", timeout=BOOT_TIMEOUT)
+                serial.wait_until_quiet(QUIET_TIME, BOOT_TIMEOUT)
             yield machine
 
 
@@ -245,23 +249,39 @@ def test_screenshot(machine: LVMachine) -> None:
 
 def test_serial(machine: LVMachine) -> None:
     with machine.serial() as serial:
-        # getty prints the prompt again for an empty login.
+        # Whatever's on the console (e.g. getty) answers a line.
         serial.write(b"\r")
-        serial.read_until(b"login:", timeout=30)
+        assert serial.read(timeout=30)
+        serial.wait_until_quiet(QUIET_TIME, 60)
 
-        # Reads stop at `size`, leaving the rest of the (longer) prompt for the next read.
+        # Reads stop at `size`, leaving the rest for the next read.
         serial.write(b"\r")
-        assert len(serial.read(4, timeout=30)) == 4
-        serial.read_until(b"login:", timeout=30)
+        assert len(serial.read(1, timeout=30)) == 1
+        assert serial.read(timeout=30)
 
 
 def communicator(machine: LVMachine, kind: str) -> ShellCommunicator:
+    if shutil.which(CLIENTS.get(kind, "true")) is None:
+        pytest.skip(f"There's no {CLIENTS[kind]} client")
     if kind == "serial":
-        return SerialCommunicator(machine.serial(), login("root", "a"))
-    return SSHCommunicator(machine.ip, "root", "a")
+        return SerialCommunicator(
+            machine.serial(), login(password="a", username="root")
+        )
+    if kind == "telnet":
+        return TelnetCommunicator(machine.ip, "root", "a")
+    if kind == "rlogin":
+        return RloginCommunicator(machine.ip, "root", "a")
+    return SSHCommunicator(machine.ip, "root", "a", file_transfer=SSH_TRANSFERS[kind])
 
 
-COMMUNICATORS = ("serial", "ssh")
+CLIENTS = {"telnet": "telnet", "rlogin": "rlogin"}
+SSH_TRANSFERS: dict[str, Literal["sftp", "scp", "shell"]] = {
+    "ssh": "sftp",
+    "ssh-scp": "scp",
+    "ssh-shell": "shell",
+}
+COMMUNICATORS = ("serial", "ssh", "telnet", "rlogin")
+TRANSFERS = (*COMMUNICATORS, "ssh-scp", "ssh-shell")
 UNAME = {name: name for name in ARCHITECTURES} | {
     # The CPU is i486-class (see `ARCH_DEFAULTS`).
     "i386": "i486",
@@ -307,7 +327,7 @@ def test_start(machine: LVMachine, kind: str) -> None:
         assert command.stderr.read() == b"done\n"
 
 
-@pytest.mark.parametrize("kind", COMMUNICATORS)
+@pytest.mark.parametrize("kind", TRANSFERS)
 def test_transfer(machine: LVMachine, kind: str, tmp_path: Path) -> None:
     data = random.randbytes(5000)
     (tmp_path / "up").write_bytes(data)
@@ -323,6 +343,5 @@ def test_power_cycle(machine: LVMachine) -> None:
 
     machine.power_on()
     assert machine.is_powered_on
-    with machine.serial() as serial:
-        # Booting may take longer than usual while other machines run in parallel.
-        serial.read_until(b"login:", timeout=2 * BOOT_TIMEOUT)
+    # Booting may take longer than usual while other machines run in parallel.
+    wait_until_ping(machine.ip, timeout=2 * BOOT_TIMEOUT)
