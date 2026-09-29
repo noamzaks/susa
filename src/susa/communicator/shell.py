@@ -5,54 +5,41 @@ import shlex
 import time
 from abc import abstractmethod
 from collections.abc import Callable
-from pathlib import Path
 from subprocess import CompletedProcess
 from typing import TypeAlias
 
 import pexpect
 from typing_extensions import override
 
-from susa.communicator.terminal import Terminal
-from susa.core.communicator import AsyncCommand, AsyncCommandRunner, FileTransferrer
-from susa.core.stream import InputStream, OutputStream
+from susa.core.communicator import AsyncCommand, AsyncCommandRunner, printf_lines
+from susa.core.stream import InputOutputStream, InputStream, OutputStream, PexpectStream
 
 EXIT = re.compile(rb"SUSA-EXIT-(\d+)\n")
 MARK_EXIT = b"echo SUSA-EXIT-$?"
-# No line editing (which may reset the terminal's settings), job notifications, echo, output translation or
-# prompts, so the output of commands is exactly what they wrote.
-SETUP = b"set +m +o emacs +o vi; stty -echo -opost; PS1=''; PS2=''"
+# No line editing (which may reset the terminal's settings), job notifications, echo, output translation, bells
+# (when input fills up) or prompts, so the output of commands is exactly what they wrote.
+SETUP = b"set +m +o emacs +o vi; stty -echo -opost -imaxbel; PS1=''; PS2=''"
 SETUP_TIMEOUT = 60
 SETUP_ATTEMPT_TIMEOUT = 10
 RECOVERY_QUIET_TIME = 1
 POLL_INTERVAL = 0.2
-PRINTF_CHUNK_SIZE = 512
 
-Prelude: TypeAlias = Callable[[Terminal], None]
+ENTER = b"\r"
+INTERRUPT = b"\x03"
+
+Prelude: TypeAlias = Callable[[InputOutputStream], None]
 
 
 def login(password: str, username: str | None = None, quiet_time: float = 3) -> Prelude:
     lines = ([username.encode()] if username is not None else []) + [password.encode()]
 
-    def prelude(terminal: Terminal) -> None:
+    def prelude(stream: InputOutputStream) -> None:
         for line in lines:
             # Input sent before the login program prompts is usually discarded.
-            terminal.wait_until_quiet(quiet_time, SETUP_TIMEOUT)
-            terminal.sendline(line)
+            stream.wait_until_quiet(quiet_time, SETUP_TIMEOUT)
+            stream.write(line + ENTER)
 
     return prelude
-
-
-def printf_lines(data: bytes, target: str) -> list[str]:
-    # Short enough lines for the terminal, with nothing but POSIX `printf`.
-    return [
-        "printf '"
-        + "".join(
-            chr(b) if chr(b).isalnum() and b < 128 else f"\\{b:03o}"
-            for b in data[i : i + PRINTF_CHUNK_SIZE]
-        )
-        + f"' >> {target}"
-        for i in range(0, len(data), PRINTF_CHUNK_SIZE)
-    ]
 
 
 class ShellInputStream(InputStream):
@@ -150,65 +137,67 @@ class ShellCommand(AsyncCommand):
         self.shell.execute(f"kill {self.pid}")
 
 
-class ShellCommunicator(AsyncCommandRunner, FileTransferrer):
+class ShellCommunicator(AsyncCommandRunner):
     def __init__(self, prelude: Prelude | None = None, quiet_time: float = 3) -> None:
         self.prelude = prelude
-        # Long enough for whatever runs at login (which may silently wait for the terminal) to be done.
+        # Long enough for whatever runs at login (which may silently wait for input) to be done.
         self.quiet_time = quiet_time
-        self.terminal: Terminal | None = None
+        self.stream: InputOutputStream | None = None
+        self.output: PexpectStream | None = None
 
     @abstractmethod
-    def open_terminal(self) -> Terminal: ...
+    def open_stream(self) -> InputOutputStream: ...
 
     @override
     def create(self) -> None:
-        terminal = self.open_terminal()
-        terminal.wait_until_quiet(self.quiet_time, SETUP_TIMEOUT)
+        stream = self.open_stream()
+        stream.wait_until_quiet(self.quiet_time, SETUP_TIMEOUT)
         if self.prelude is not None:
-            self.prelude(terminal)
-            terminal.wait_until_quiet(self.quiet_time, SETUP_TIMEOUT)
+            self.prelude(stream)
+            stream.wait_until_quiet(self.quiet_time, SETUP_TIMEOUT)
+        output = PexpectStream(stream)
         deadline = time.time() + SETUP_TIMEOUT
         # Input sent before the shell is ready (e.g. while logging in) may be partly discarded, so retry, clearing
         # the line first (but not before the first attempt, since interrupting a shell that's starting may kill it).
         while True:
-            terminal.sendline(SETUP)
-            terminal.sendline(MARK_EXIT)
+            # One line, since turning line editing off discards whatever it already read.
+            stream.write(SETUP + b"; " + MARK_EXIT + ENTER)
             try:
-                terminal.expect(EXIT, SETUP_ATTEMPT_TIMEOUT)
+                output.expect(EXIT, SETUP_ATTEMPT_TIMEOUT)
                 break
             except pexpect.TIMEOUT:
                 if time.time() > deadline:
                     raise TimeoutError("The shell didn't become ready") from None
-                terminal.sendintr()
-        terminal.wait_until_quiet(RECOVERY_QUIET_TIME, SETUP_TIMEOUT)
-        self.terminal = terminal
+                stream.write(INTERRUPT)
+        stream.wait_until_quiet(RECOVERY_QUIET_TIME, SETUP_TIMEOUT)
+        output.buffer = b""
+        self.stream, self.output = stream, output
 
     @override
     def destroy(self) -> None:
-        assert self.terminal is not None
-        self.terminal.sendline(b"exit")
-        self.terminal.close()
-        self.terminal = None
+        assert self.stream is not None
+        self.stream.write(b"exit" + ENTER)
+        self.stream.close()
+        self.stream, self.output = None, None
 
     def execute(self, command: str, timeout: float = 60) -> CompletedProcess[bytes]:
-        assert self.terminal is not None
-        self.terminal.sendline(command.encode())
-        self.terminal.sendline(MARK_EXIT)
+        assert self.stream is not None and self.output is not None
+        self.stream.write(command.encode() + ENTER + MARK_EXIT + ENTER)
         try:
-            self.terminal.expect(EXIT, timeout)
+            self.output.expect(EXIT, timeout)
         except pexpect.TIMEOUT:
             # Interrupting usually also discards the pending marker line, so send it again.
-            self.terminal.sendintr()
-            self.terminal.sendline(MARK_EXIT)
-            self.terminal.expect(EXIT, SETUP_ATTEMPT_TIMEOUT)
-            self.terminal.wait_until_quiet(RECOVERY_QUIET_TIME, SETUP_TIMEOUT)
+            self.stream.write(INTERRUPT + MARK_EXIT + ENTER)
+            self.output.expect(EXIT, SETUP_ATTEMPT_TIMEOUT)
+            self.stream.wait_until_quiet(RECOVERY_QUIET_TIME, SETUP_TIMEOUT)
+            self.output.buffer = b""
             raise TimeoutError(
                 f"{command!r} took more than {timeout} seconds"
             ) from None
-        assert self.terminal.before is not None
-        return CompletedProcess(
-            command, int(self.terminal.match.group(1)), self.terminal.before
-        )
+        before, match = self.output.before, self.output.match
+        # Sanity.
+        assert before is not None and isinstance(match, re.Match)
+        return CompletedProcess(command, int(match.group(1)), before)
 
     def background(self, command: str) -> str:
         started = self.execute(f"{command} & echo $!")
@@ -219,15 +208,3 @@ class ShellCommunicator(AsyncCommandRunner, FileTransferrer):
     @override
     def start(self, command: str) -> ShellCommand:
         return ShellCommand(self, command)
-
-    @override
-    def upload(self, local: Path, remote: str) -> None:
-        target = shlex.quote(remote)
-        lines = [f": > {target}", *printf_lines(local.read_bytes(), target)]
-        self.execute(" &&\n".join(lines)).check_returncode()
-
-    @override
-    def download(self, remote: str, local: Path) -> None:
-        result = self.execute(f"cat {shlex.quote(remote)}")
-        result.check_returncode()
-        local.write_bytes(result.stdout)

@@ -2,13 +2,12 @@ from __future__ import annotations
 
 from typing_extensions import override
 
+from susa.communicator.process import ProcessStream
 from susa.communicator.shell import Prelude, ShellCommunicator, login
-from susa.communicator.terminal import ProcessTerminal, Terminal
+from susa.core.stream import InputOutputStream
 
 
 class RloginCommunicator(ShellCommunicator):
-    """A shell over the `rlogin` client as `username`, giving `password` (by default) if asked for one."""
-
     def __init__(
         self,
         host: str,
@@ -21,6 +20,6 @@ class RloginCommunicator(ShellCommunicator):
         self.username = username
 
     @override
-    def open_terminal(self) -> Terminal:
+    def open_stream(self) -> InputOutputStream:
         # 8-bit clean, with no escape character (which would otherwise be intercepted in the data).
-        return ProcessTerminal("rlogin", "-8", "-E", "-l", self.username, self.host)
+        return ProcessStream("rlogin", "-8", "-E", "-l", self.username, self.host)

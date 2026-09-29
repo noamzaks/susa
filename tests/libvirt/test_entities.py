@@ -8,9 +8,8 @@ import libvirt as lv
 import pytest
 
 from susa.core.interface import Interface
-from susa.core.keyboard import Key, type_text
+from susa.core.keyboard import Key, KeyPressable
 from susa.core.machine import (
-    KeyPressable,
     Machine,
     Powerable,
     Screenshottable,
@@ -216,4 +215,4 @@ def test_machine_press() -> None:
     with LVMachine(domain()) as machine:
         assert isinstance(machine, KeyPressable)
         machine.press([Key.LEFT_CTRL, Key.LEFT_ALT, Key.DELETE])
-        type_text(machine, "root\n")
+        machine.type_text("root\n")

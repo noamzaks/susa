@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import string
+from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from enum import Enum
 
-from susa.core.machine import KeyPressable
+from typing_extensions import override
+
+from susa.core.stream import InputStream
 
 
 class Key(Enum):
@@ -131,6 +135,7 @@ UNSHIFTED: dict[str, Key] = {
     "/": Key.SLASH,
     " ": Key.SPACE,
     "\n": Key.ENTER,
+    "\r": Key.ENTER,
     "\t": Key.TAB,
     "\b": Key.BACKSPACE,
     "\x1b": Key.ESCAPE,
@@ -147,8 +152,25 @@ KEYS: dict[str, list[Key]] = {
 }
 
 
-def type_text(machine: KeyPressable, text: str, hold_time: float = 0.05) -> None:
-    for c in text:
-        if c not in KEYS:
-            raise ValueError(f"Can't type {c!r}")
-        machine.press(KEYS[c], hold_time)
+class KeyPressable(ABC):
+    @abstractmethod
+    def press(self, keys: Sequence[Key], hold_time: float = 0.1) -> None: ...
+
+    def type_text(self, text: str, hold_time: float = 0.05) -> None:
+        for c in text:
+            if c not in KEYS:
+                raise ValueError(f"Can't type {c!r}")
+            self.press(KEYS[c], hold_time)
+
+
+class KeyPressableInputStream(InputStream):
+    def __init__(self, machine: KeyPressable) -> None:
+        self.machine = machine
+
+    @override
+    def write(self, data: bytes) -> None:
+        self.machine.type_text(data.decode())
+
+    @override
+    def close(self) -> None:
+        pass

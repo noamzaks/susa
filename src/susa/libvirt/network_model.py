@@ -127,3 +127,9 @@ class NetworkModel(Model[lvnetwork.network]):
 
     def get_ip(self, mac: str) -> str | None:
         return self.get_hosts().get(mac)
+
+    def get_bridge(self) -> str:
+        assert (
+            self.xml_model.bridge is not None and self.xml_model.bridge.name is not None
+        )
+        return self.xml_model.bridge.name

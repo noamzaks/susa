@@ -3,22 +3,22 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal
 
 from typing_extensions import override
 
+from susa.communicator.process import ProcessStream
 from susa.communicator.shell import Prelude, ShellCommunicator
-from susa.communicator.terminal import ProcessTerminal, Terminal
+from susa.core.communicator import FileTransferrer
+from susa.core.stream import InputOutputStream
 
 OPTIONS = ("StrictHostKeyChecking=no", "UserKnownHostsFile=/dev/null", "LogLevel=ERROR")
 TRANSFER_TIMEOUT = 300
 
 
 class SSHCommunicator(ShellCommunicator):
-    """A shell over `ssh`, with a password or keys. Files are transferred with `scp`, over the SFTP protocol
-    (`file_transfer="sftp"`) or the legacy SCP one (`"scp"`), or through the shell (`"shell"`)."""
-
     def __init__(
         self,
         host: str,
@@ -70,8 +70,8 @@ class SSHCommunicator(ShellCommunicator):
         return [f"-o{option}" for option in OPTIONS]
 
     @override
-    def open_terminal(self) -> Terminal:
-        return ProcessTerminal(
+    def open_stream(self) -> InputOutputStream:
+        return ProcessStream(
             "ssh",
             "-tt",
             f"-p{self.port}",
@@ -99,15 +99,29 @@ class SSHCommunicator(ShellCommunicator):
         )
 
     @override
-    def upload(self, local: Path, remote: str) -> None:
+    def upload_single(self, local: Path, remote: str) -> None:
         if self.file_transfer == "shell":
-            super().upload(local, remote)
+            super().upload_single(local, remote)
         else:
             self.scp(str(local), f"{self.username}@{self.host}:{remote}")
 
     @override
-    def download(self, remote: str, local: Path) -> None:
+    def download_single(self, remote: str, local: Path) -> None:
         if self.file_transfer == "shell":
-            super().download(remote, local)
+            super().download_single(remote, local)
         else:
             self.scp(f"{self.username}@{self.host}:{remote}", str(local))
+
+    @override
+    def upload(self, files: Mapping[Path, str]) -> None:
+        if self.file_transfer == "shell":
+            super().upload(files)
+        else:
+            FileTransferrer.upload(self, files)
+
+    @override
+    def download(self, files: Mapping[str, Path]) -> None:
+        if self.file_transfer == "shell":
+            super().download(files)
+        else:
+            FileTransferrer.download(self, files)

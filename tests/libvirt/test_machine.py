@@ -3,12 +3,12 @@ from __future__ import annotations
 import random
 import shutil
 import subprocess
-import time
 from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import Literal
 
 import pytest
+from scapy.layers.inet import ICMP, IP
 from typing_extensions import override
 
 from susa import tmp_dir_path
@@ -17,7 +17,6 @@ from susa.communicator.serial import SerialCommunicator
 from susa.communicator.shell import ShellCommunicator, login
 from susa.communicator.ssh import SSHCommunicator
 from susa.communicator.telnet import TelnetCommunicator
-from susa.core.keyboard import type_text
 from susa.core.machine import Serial
 from susa.core.stream import SavedOutputStream
 from susa.libvirt.connection import Connection
@@ -28,7 +27,7 @@ from susa.libvirt.machine_model import MachineModel
 from susa.libvirt.network import LVNetwork
 from susa.libvirt.network_model import NetworkModel
 from susa.linked_clone import LinkedClone
-from susa.utilities.generic import GIGA, wait_until
+from susa.utilities.generic import GIGA
 from susa.utilities.networking import ping, wait_until_ping
 
 MACHINES = Path("/machines")
@@ -204,9 +203,9 @@ def connection() -> Generator[None, None, None]:
     scope="module",
     params=[pytest.param(a, marks=pytest.mark.xdist_group(a)) for a in ARCHITECTURES],
 )
-def base_machine(
+def setup(
     request: pytest.FixtureRequest, connection: None
-) -> Generator[LVMachine, None, None]:
+) -> Generator[tuple[LVNetwork, LVMachine], None, None]:
     arch: str = request.param
     if not DISKS[arch].exists():
         pytest.skip(f"{DISKS[arch]} doesn't exist")
@@ -219,7 +218,7 @@ def base_machine(
         )
         domain = ARCHITECTURES[arch](Path(clone.path), tmp, network)
 
-        with LVNetwork(network), LVMachine(domain) as machine:
+        with LVNetwork(network) as n, LVMachine(domain) as machine:
             wait_until_ping(machine.ip, timeout=BOOT_TIMEOUT)
             # Machines may answer ping before they're done booting, which ends with the console going quiet.
             with machine.serial() as serial:
@@ -228,7 +227,17 @@ def base_machine(
                     boot.wait_until_quiet(QUIET_TIME, BOOT_TIMEOUT)
                 finally:
                     print(boot.data.decode(errors="backslashreplace"))
-            yield machine
+            yield n, machine
+
+
+@pytest.fixture(scope="module")
+def base_machine(setup: tuple[LVNetwork, LVMachine]) -> LVMachine:
+    return setup[1]
+
+
+@pytest.fixture(scope="module")
+def network(setup: tuple[LVNetwork, LVMachine]) -> LVNetwork:
+    return setup[0]
 
 
 @pytest.fixture(scope="module")
@@ -343,7 +352,7 @@ UNAME = {name: name for name in ARCHITECTURES} | {
 @pytest.fixture
 def name(request: pytest.FixtureRequest) -> str:
     """The name (in `ARCHITECTURES`) of the machine the test got."""
-    result: str = request.node.callspec.params["base_machine"]
+    result: str = request.node.callspec.params["setup"]
     return result
 
 
@@ -379,12 +388,16 @@ def test_start(machine: LVMachine, kind: str) -> None:
 
 @pytest.mark.parametrize("kind", TRANSFERS)
 def test_transfer(machine: LVMachine, kind: str, tmp_path: Path) -> None:
-    data = random.randbytes(5000)
-    (tmp_path / "up").write_bytes(data)
+    data = [random.randbytes(5000) for _ in range(3)]
+    for i, content in enumerate(data):
+        (tmp_path / f"up{i}").write_bytes(content)
     with communicator(machine, kind) as c:
-        c.upload(tmp_path / "up", "/tmp/susa")
-        c.download("/tmp/susa", tmp_path / "down")
-    assert (tmp_path / "down").read_bytes() == data
+        c.upload_single(tmp_path / "up0", "/tmp/susa0")
+        c.download_single("/tmp/susa0", tmp_path / "down0")
+        c.upload({tmp_path / f"up{i}": f"/tmp/susa{i}" for i in (1, 2)})
+        c.download({f"/tmp/susa{i}": tmp_path / f"down{i}" for i in (1, 2)})
+    for i, content in enumerate(data):
+        assert (tmp_path / f"down{i}").read_bytes() == content
 
 
 def test_power_cycle(machine: LVMachine) -> None:
@@ -397,30 +410,12 @@ def test_power_cycle(machine: LVMachine) -> None:
     wait_until_ping(machine.ip, timeout=2 * BOOT_TIMEOUT)
 
 
-def test_type(machine: LVMachine) -> None:
-    text = r"""Az09 !@#$%^&*()-_=+[]{}\|;:",.<>/?`~"""
-    with SSHCommunicator(machine.ip, "root", "a") as ssh:
-
-        def console_session() -> bool:
-            return any(
-                b"root" in line and b"pts" not in line
-                for line in ssh.check("who").splitlines()
-            )
-
-        # The console has no output to wait for, and login discards a password typed before its prompt, so retry.
-        for _ in range(5):
-            type_text(machine, "root\n")
-            wait_until(lambda _: ssh.execute("pgrep -x login").returncode == 0, 30)
-            time.sleep(3)
-            type_text(machine, "a\n")
-            try:
-                wait_until(lambda _: console_session(), 30)
-                break
-            except TimeoutError:
-                continue
-        assert console_session()
-
-        type_text(machine, f"printf '%s\\n' '{text}' > /tmp/typed\n")
-        wait_until(
-            lambda _: ssh.execute("cat /tmp/typed").stdout == f"{text}\n".encode(), 60
-        )
+def test_sniff(machine: LVMachine, network: LVNetwork) -> None:
+    with network.sniffer() as sniffer:
+        ping(machine.ip, 3, timeout=5, interval=1)
+    requests = [
+        p
+        for p in sniffer.packets()
+        if ICMP in p and p[ICMP].type == 8 and p[IP].dst == machine.ip
+    ]
+    assert len(requests) == 3

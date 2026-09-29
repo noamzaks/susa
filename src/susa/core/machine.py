@@ -11,11 +11,7 @@ from susa.core.resource import Resource
 from susa.core.stream import InputOutputStream
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
     from PIL.ImageFile import ImageFile
-
-    from susa.core.keyboard import Key
 
 
 class Machine(Resource):
@@ -93,11 +89,6 @@ class Screenshot:
 class Screenshottable(ABC):
     @abstractmethod
     def screenshot(self) -> Screenshot: ...
-
-
-class KeyPressable(ABC):
-    @abstractmethod
-    def press(self, keys: Sequence[Key], hold_time: float = 0.1) -> None: ...
 
 
 class Serial(Resource, InputOutputStream): ...

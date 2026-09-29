@@ -37,7 +37,10 @@ Two layers:
 
 - **`susa.core`** holds backend-independent abstract classes: `Resource` (create/destroy, usable as a
   context manager), `Machine`, `Network`, and `Interface` (`mac`, and `ip` when it's known in advance).
-  `Machine` and `Network` both expose an `interfaces` property. Optional machine capabilities are separate
+  `Machine` and `Network` both expose an `interfaces` property. `Sniffable` networks have `sniffer()`, which
+  returns a (not yet created) `Sniffer` (a `Resource` whose output is a pcap stream, with `next_packet`/`packets`
+  parsing it into scapy packets, scapy imported lazily); `LVNetwork` runs `tcpdump` on
+  its bridge (the host's `tcpdump` needs `cap_net_raw,cap_net_admin`). Optional machine capabilities are separate
   mixins in `core/machine.py`:
   - `Snapshottable` (`snapshot()` returns a `Snapshot`; destroying a snapshot reverts the machine)
   - `Powerable` (`is_powered_on`; `power_on`/`power_off`/`reset` are immediate; `shutdown`/`reboot` ask
@@ -45,13 +48,18 @@ Two layers:
   - `Screenshottable` (a `Screenshot` of bytes plus an optional MIME type)
   - `SerialAccessible` (`serial()` returns an already created `Serial`, which is a `Resource` and an
     `InputOutputStream`)
-  - `KeyPressable` (`press(keys, hold_time)` holds `Key`s together). `core/keyboard.py` has the `Key` enum
-    (values are Linux input event codes) and `type_text(machine, text)`, which types letters, digits, ASCII
-    symbols, space, `\n`, `\t`, `\b` and ESC as on a US keyboard
+  - `KeyPressable` (in `core/keyboard.py`, with the `Key` enum, whose values are Linux input event codes):
+    `press(keys, hold_time)` holds `Key`s together, and `type_text(text)` types letters, digits, ASCII
+    symbols, space, `\n`, `\r`, `\t`, `\b` and ESC as on a US keyboard
   - `core/stream.py` has `OutputStream` (`read(size, timeout)`, which raises `EOFError` once the stream
     ended and nothing's left; `read_until`; `read_all` until EOF; `is_quiet`; and `wait_until_quiet`, which
     never starts a quiet period that can't fit before its timeout), `SavedOutputStream` (keeps what's read),
-    `InputStream` (`write` and `close`) and `InputOutputStream`
+    `PexpectStream` (pexpect's `SpawnBase` over an `OutputStream`: `expect`, `before`, `match`; `read` goes
+    straight to the wrapped stream, so data `expect` read past its match stays in its `buffer`), `InputStream` (`write` and `close`),
+    `InputOutputStream`, and `BasicInputOutputStream` (an `OutputStream` plus an `InputStream`)
+  - `KeyPressableInputStream` (an `InputStream` over a `KeyPressable` that types what's written). An
+    `OutputStream` of OCR'd screen text was tried and removed: OCR output jitters between screenshots of the
+    same screen, so new text can't be told apart from old without heuristics.
   - `core/interface.py` has `BasicInterface`, a plain `(mac, ip)` value (`LVInterface` is one)
 - **`susa.libvirt`** implements them as `LVMachine` (all of the machine mixins), `LVNetwork`, `LVSnapshot`,
   `LVSerial` and `LVInterface`.
@@ -80,32 +88,34 @@ the console pty is only accessible to the `qemu` user, so it can't be opened dir
 
 ### Communicators
 
-`susa.core.communicator` defines three classes. Everything is `bytes`:
-- **`CommandRunner`**: `run(command) -> subprocess.CompletedProcess[bytes]`, and `check`, which returns stdout
-  and raises `CalledProcessError` on failure.
+`susa.core.communicator` (everything is `bytes`):
+- **`FileTransferrer`**: abstract `upload_single(local, remote)`/`download_single(remote, local)`, and
+  `upload({local: remote})`/`download({remote: local})`, which loop over them by default.
+- **`CommandRunner`** (a `FileTransferrer`): `run(command) -> subprocess.CompletedProcess[bytes]`, and `check`,
+  which returns stdout and raises `CalledProcessError` on failure. Its file transfer is built on commands
+  alone: data is gzipped and written with POSIX `printf` (`printf_lines`) into a `mktemp` file, then
+  `gzip -dc`'d into place, and multiple files go as one gzipped tar (`tar -xzPf -`, `tar -czPf -`; `-P` keeps
+  each given path, absolute or relative). Downloads are `gzip -c`/`tar -czPf -` output.
 - **`AsyncCommandRunner`**: adds `start(command) -> AsyncCommand`, with `stdin` (an `InputStream`),
   `stdout` and `stderr` (`OutputStream`s), `poll`, `wait` (returns the exit code) and `kill`. Its default `run`
   is `start`, `stdin.close()`, `wait`, then `read_all` of both streams (a timeout doesn't kill the command).
-- **`FileTransferrer`**: a separate `upload`/`download` mixin.
 
-`susa.communicator` has two layers:
-- **`terminal.py`:** the pexpect layer. `Terminal` is a protocol; its implementations (`TerminalStream`
-  subclasses) are also `InputOutputStream`s, so they get `is_quiet`/`wait_until_quiet` from the stream class.
-  `ProcessTerminal` is a local process in a pty, used by `ssh`, `telnet` and `rlogin`. `StreamTerminal` works
-  over any `InputOutputStream`, e.g. a `Serial`.
-- **`shell.py`:** `ShellCommunicator` (an `AsyncCommandRunner` and a `FileTransferrer`) drives a POSIX shell
-  over a `Terminal` from its abstract `open_terminal()`. The subclasses just open theirs:
+`susa.communicator`: transports are plain `InputOutputStream`s. `ProcessStream` is a local process in a pty
+(holding a `pexpect.spawn`), used for `ssh`, `telnet` and `rlogin`, and a `Serial` is one already.
+`ShellCommunicator` (an `AsyncCommandRunner`) drives a POSIX shell over the stream from its abstract
+`open_stream()`, writing `ENTER` (`\r`, like a terminal's Enter key, which raw readers like rlogind's password
+prompt expect) and `INTERRUPT` (`\x03`) itself, and matching output with a `PexpectStream` over it (clearing its `buffer` after quiet waits, which read the
+raw stream). The
+subclasses just open theirs:
   - `SerialCommunicator`, over a `Serial`
   - `SSHCommunicator`: the password comes from `SSH_ASKPASS` with `SSH_ASKPASS_REQUIRE=force`, so no prompt is
-    matched, and files go through `scp` over SFTP (`-s`), legacy SCP (`-O`), or the shell
+    matched, and files go through `scp` over SFTP (`-s`) or legacy SCP (`-O`), or the shell (`"shell"`)
   - `TelnetCommunicator` and `RloginCommunicator`, over the `telnet`/`rlogin` CLI clients with `-8 -E`
     (on Fedora from the `telnet` and `rsh` packages; `rlogin` has `cap_net_bind_service` for the reserved
     source port rlogind requires)
-  Terminals end lines with CR, like a terminal's Enter key, since some readers (e.g. rlogind's password
-  prompt) read raw input.
-  It must work with non-bash shells too (e.g. FreeBSD's `/bin/sh`), so keep shell snippets minimal and POSIX.
-  Waiting for quiet is the generic "the other side is done talking" signal, used in place of matching
-  specific prompts.
+It must work with non-bash shells too (e.g. FreeBSD's `/bin/sh`), so keep shell snippets minimal and POSIX.
+Waiting for quiet is the generic "the other side is done talking" signal, used in place of matching specific
+prompts.
 - **Prelude:** an optional `prelude` gets the terminal before it's a shell. `login(password, username=None)`
   sends the username (if given), then the password, each once the terminal is quiet. That's
   best-effort for any getty or login program, and for rlogin (password only).
@@ -113,7 +123,9 @@ the console pty is only accessible to the `qemu` user, so it can't be opened dir
   (3 s by default). It has to outlast whatever runs at login and silently waits on the terminal. For
   example, FreeBSD's `resizewin` queries the terminal and waits about 1 s for a reply. Input sent during
   that wait is swallowed, and in one case the rest of the line started `vi`. It then sets
-  `set +m +o emacs +o vi; stty -echo -opost; PS1=''; PS2=''`. Line editing has to go first: libedit (e.g.
+  `set +m +o emacs +o vi; stty -echo -opost -imaxbel; PS1=''; PS2=''`, with the exit marker on the same line (turning
+  line editing off discards whatever it already read). `-imaxbel` stops the tty from ringing bells into the
+  output when a burst of input fills its queue (seen over FreeBSD telnet/rlogin; the data still arrives). Line editing has to go first: libedit (e.g.
   FreeBSD's `sh`) resets the terminal settings around every line it reads, and turning it off restores
   them. Without readline, bash also stops emitting bracketed-paste escapes. After that there's no echo,
   prompt, newline translation or job notification, and output is exactly what commands wrote. A retry is needed if
@@ -127,9 +139,6 @@ the console pty is only accessible to the `qemu` user, so it can't be opened dir
   writes are `printf` into the FIFO. `wait` is the shell's `wait <pid>`, whose status can only be collected
   once, so it's cached. `poll` is `kill -0`, and `kill` is `kill <pid>`. Output streams read with
   `tail -c +N | head -c SIZE`, and raise `EOFError` once the command exited and everything was read.
-- **Transfer:** `upload` is POSIX `printf` with octal escapes, in lines chained with `&&` and short enough
-  for the terminal. No decoder is needed (FreeBSD 10 has no `base64`), and no Ctrl-D, which would end the
-  shell. `download` is `cat`.
 
 `NetworkModel.ip()` also publishes the gateway (the host) as `host` in the network's DNS, since some guest
 services (e.g. rsh-redone rlogind) reverse-resolve clients and drop them otherwise.
@@ -168,8 +177,8 @@ with reserved IPs.
   go quiet (boot is over). The `ready` fixture then snapshots it, and the function-scoped `machine` fixture reverts to that
   snapshot after every test, so tests are independent (e.g. the power cycle can run anywhere). It also
   patches `machine.serial()` so everything read from the console is saved (`SavedOutputStream`) and attached to
-  the test's report as a "serial" section; `base_machine` prints the boot output. `test_type` logs in on the
-  graphical console by typing and checks a typed `printf` of every symbol over SSH. The Debian images that boot through GRUB have `GRUB_TIMEOUT=0`. All images run telnet (23) and rlogin
+  the test's report as a "serial" section; `base_machine` prints the boot output. `test_sniff`
+  captures ICMP to the machine with `network.sniffer()`. The Debian images that boot through GRUB have `GRUB_TIMEOUT=0`. All images run telnet (23) and rlogin
   (513) servers from inetd (see `/machines/susa-notes/remote-login.md`). The images have sshd enabled and users `root` and `user`, both with password
   `a`. It needs UEFI firmware for x86_64/aarch64 (`/usr/share/OVMF`, `/usr/share/AAVMF`), and the external
   kernels/initrds under `/machines/debian-*-boot`. Disk clones go through `LinkedClone` in a `0o777` temp

@@ -7,8 +7,9 @@ from subprocess import CalledProcessError, CompletedProcess
 import pytest
 from typing_extensions import override
 
-from susa.communicator.shell import Prelude, ShellCommunicator
-from susa.communicator.terminal import ProcessTerminal, Terminal
+from susa.communicator.process import ProcessStream
+from susa.communicator.shell import ENTER, Prelude, ShellCommunicator
+from susa.core.stream import InputOutputStream
 
 SHELLS = {
     "bash": ["bash", "--norc", "--noprofile", "-i"],
@@ -22,8 +23,8 @@ class LocalShell(ShellCommunicator):
         self.argv = argv
 
     @override
-    def open_terminal(self) -> Terminal:
-        return ProcessTerminal(*self.argv)
+    def open_stream(self) -> InputOutputStream:
+        return ProcessStream(*self.argv)
 
 
 @pytest.fixture(params=list(SHELLS))
@@ -108,8 +109,8 @@ def test_run_timeout(shell: LocalShell) -> None:
 
 
 def test_prelude() -> None:
-    def prelude(terminal: Terminal) -> None:
-        terminal.sendline(b"cd /tmp")
+    def prelude(stream: InputOutputStream) -> None:
+        stream.write(b"cd /tmp" + ENTER)
 
     with LocalShell(SHELLS["bash"], prelude) as shell:
         assert shell.execute("pwd").stdout == b"/tmp\n"
@@ -119,10 +120,31 @@ def test_transfer(shell: LocalShell, tmp_path: Path) -> None:
     data = random.randbytes(5000)
     (tmp_path / "up").write_bytes(data)
     with shell:
-        shell.upload(tmp_path / "up", str(tmp_path / "remote"))
-        shell.download(str(tmp_path / "remote"), tmp_path / "down")
+        shell.upload_single(tmp_path / "up", str(tmp_path / "remote"))
+        shell.download_single(str(tmp_path / "remote"), tmp_path / "down")
     assert (tmp_path / "remote").read_bytes() == data
     assert (tmp_path / "down").read_bytes() == data
+
+
+def test_transfer_multiple(shell: LocalShell, tmp_path: Path) -> None:
+    data = {name: random.randbytes(3000) for name in ("a", "b", "c")}
+    for name, content in data.items():
+        (tmp_path / name).write_bytes(content)
+    (tmp_path / "remote").mkdir()
+    (tmp_path / "down").mkdir()
+    with shell:
+        shell.execute(f"cd {tmp_path}")
+        # Absolute and relative remote paths.
+        remotes = {
+            "a": str(tmp_path / "remote" / "a"),
+            "b": "remote/b",
+            "c": "remote/c",
+        }
+        shell.upload({tmp_path / n: r for n, r in remotes.items()})
+        shell.download({r: tmp_path / "down" / n for n, r in remotes.items()})
+    for name, content in data.items():
+        assert (tmp_path / "remote" / name).read_bytes() == content
+        assert (tmp_path / "down" / name).read_bytes() == content
 
 
 def test_start_stdin(shell: LocalShell) -> None:

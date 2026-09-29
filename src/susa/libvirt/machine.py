@@ -6,9 +6,8 @@ import libvirt as lv
 from typing_extensions import override
 
 from susa.core.interface import Interface
-from susa.core.keyboard import Key
+from susa.core.keyboard import Key, KeyPressable
 from susa.core.machine import (
-    KeyPressable,
     Machine,
     Powerable,
     Screenshot,

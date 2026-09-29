@@ -5,8 +5,7 @@ from collections.abc import Sequence
 import pytest
 from typing_extensions import override
 
-from susa.core.keyboard import Key, type_text
-from susa.core.machine import KeyPressable
+from susa.core.keyboard import Key, KeyPressable
 
 
 class FakeKeyboard(KeyPressable):
@@ -20,7 +19,7 @@ class FakeKeyboard(KeyPressable):
 
 def test_type_text() -> None:
     keyboard = FakeKeyboard()
-    type_text(keyboard, "aZ5% _\n\t~")
+    keyboard.type_text("aZ5% _\n\t~")
     assert keyboard.presses == [
         [Key.A],
         [Key.LEFT_SHIFT, Key.Z],
@@ -35,9 +34,9 @@ def test_type_text() -> None:
 
 
 def test_type_text_everything_printable() -> None:
-    type_text(FakeKeyboard(), "".join(map(chr, range(32, 127))))
+    FakeKeyboard().type_text("".join(map(chr, range(32, 127))))
 
 
 def test_type_text_unsupported() -> None:
     with pytest.raises(ValueError, match="é"):
-        type_text(FakeKeyboard(), "é")
+        FakeKeyboard().type_text("é")
