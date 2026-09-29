@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import cast
 
 import libvirt as lv
 from typing_extensions import override
@@ -16,7 +17,7 @@ from susa.core.machine import (
     Snapshot,
     Snapshottable,
 )
-from susa.libvirt.entity import LVEntity
+from susa.libvirt.entity import LVEntity, LVEntityState
 from susa.libvirt.interface import LVInterface
 from susa.libvirt.machine_model import MachineModel, SnapshotModel
 from susa.libvirt.network_model import NetworkModel
@@ -26,7 +27,15 @@ from susa.libvirt.stream import LVStream
 SCREENSHOT_TIMEOUT = 60
 
 
+class LVSnapshotState(LVEntityState[SnapshotModel]):
+    # pydantic doesn't substitute `M` in inherited fields.
+    model: SnapshotModel
+    machine: LVMachine
+
+
 class LVSnapshot(LVEntity[lv.virDomainSnapshot, SnapshotModel], Snapshot):
+    state_type = LVSnapshotState
+
     def __init__(
         self,
         machine: LVMachine,
@@ -51,6 +60,19 @@ class LVSnapshot(LVEntity[lv.virDomainSnapshot, SnapshotModel], Snapshot):
         self.value = None
 
     @override
+    def lookup(self) -> lv.virDomainSnapshot:
+        return self.machine.domain.snapshotLookupByName(self.model.get_name())
+
+    @override
+    def __getstate__(self) -> LVSnapshotState:
+        return {**super().__getstate__(), "machine": self.machine}
+
+    @override
+    def __setstate__(self, state: LVEntityState[SnapshotModel]) -> None:
+        self.machine = cast(LVSnapshotState, state)["machine"]
+        super().__setstate__(state)
+
+    @override
     def revert(self) -> None:
         assert self.value is not None and self.machine.value is not None
         self.machine.value.revertToSnapshot(self.value)
@@ -65,6 +87,8 @@ class LVMachine(
     SerialAccessible,
     KeyPressable,
 ):
+    state_type = LVEntityState[MachineModel]
+
     @property
     def domain(self) -> lv.virDomain:
         assert self.value is not None, "The machine wasn't created!"
@@ -80,6 +104,10 @@ class LVMachine(
         assert self.value is None
         self.value = self.conn.defineXML(self.build())
         self.value.create()
+
+    @override
+    def lookup(self) -> lv.virDomain:
+        return self.conn.lookupByName(self.name)
 
     @override
     def destroy(self) -> None:

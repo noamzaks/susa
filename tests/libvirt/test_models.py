@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 import platform
 import re
 from pathlib import Path
+from typing import Any
 
+import pydantic
 import pytest
 from pytest_snapshot.plugin import Snapshot
 
@@ -285,3 +288,89 @@ def test_interface_model_network() -> None:
     interface = InterfaceModel(mac=MAC)
     assert interface.network("test") is interface
     assert interface.get_network() == "test"
+
+
+def test_machine_model_from_json() -> None:
+    machine = pydantic.TypeAdapter(MachineModel).validate_python(
+        [
+            {"name": "test"},
+            {"arch": "x86_64"},
+            "default",
+            {"memory": 4 * GIGA},
+            {"cpu": 2},
+            {"efi": {"loader": "loader", "nvram": "nvram"}},
+            {"kernel": {"kernel": "vmlinux", "cmdline": "console=ttyS0"}},
+            {"disk": [{"source": "somewhere"}]},
+            {"interface": [{"mac": MAC}, {"network": "test"}, {"default": "x86_64"}]},
+            {"qemu_args": ["-cpu", "max"]},
+        ]
+    )
+    expected = (
+        MachineModel("test")
+        .arch("x86_64")
+        .default()
+        .memory(4 * GIGA)
+        .cpu(2)
+        .efi("loader", "nvram")
+        .kernel("vmlinux", cmdline="console=ttyS0")
+        .disk(DiskModel().source("somewhere"))
+        .interface(InterfaceModel(mac=MAC).network("test").default("x86_64"))
+        .qemu_args("-cpu", "max")
+    )
+    assert machine.build() == expected.build()
+
+
+def test_network_model_from_json() -> None:
+    network = pydantic.TypeAdapter(NetworkModel).validate_python(
+        [
+            {"name": "test"},
+            "default",
+            {"ip": {"address": "10.0.0.1", "netmask": "255.255.0.0"}},
+            {"interface": {"interface": [{"mac": MAC}], "ip": "10.0.0.10"}},
+            "nat",
+        ]
+    )
+    expected = (
+        NetworkModel("test")
+        .default()
+        .ip("10.0.0.1", "255.255.0.0")
+        .interface(InterfaceModel(mac=MAC), "10.0.0.10")
+        .nat()
+    )
+    assert network.build() == expected.build()
+
+
+@pytest.mark.parametrize(
+    "calls",
+    (
+        ["unknown"],
+        [{"arch": "x86_64", "cpu": 2}],
+        [{"efi": {"loader": "loader"}}],
+        [{"efi": {"loader": "loader", "nvram": "nvram", "extra": 1}}],
+        [{"memory": "a lot"}],
+        ["arch"],
+    ),
+)
+def test_machine_model_from_invalid_json(calls: list[Any]) -> None:
+    with pytest.raises(pydantic.ValidationError):
+        pydantic.TypeAdapter(MachineModel).validate_python(calls)
+
+
+def test_model_json_schema() -> None:
+    schema = json.dumps(pydantic.TypeAdapter(MachineModel).json_schema())
+    for method in ("arch", "default", "efi", "disk", "qemu_args", "source", "mac"):
+        assert f'"{method}"' in schema
+
+
+def test_model_json() -> None:
+    adapter = pydantic.TypeAdapter(MachineModel)
+    machine = MachineModel("test").arch("x86_64").default()
+    assert adapter.validate_python(machine) is machine
+    assert adapter.dump_python(machine) == machine.build()
+    assert adapter.validate_json(adapter.dump_json(machine)).build() == machine.build()
+
+
+@pytest.mark.parametrize("arch", ARCHITECTURES)
+def test_machine_model_parse(arch: str) -> None:
+    xml = MachineModel("test").arch(arch).default().qemu_args("-cpu", "max").build()
+    assert MachineModel.parse(xml).build() == xml

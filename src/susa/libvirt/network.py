@@ -10,7 +10,7 @@ from typing_extensions import override
 
 from susa.core.interface import Interface
 from susa.core.network import Network, Sniffable, Sniffer
-from susa.libvirt.entity import LVEntity
+from susa.libvirt.entity import LVEntity, LVEntityState
 from susa.libvirt.interface import LVInterface
 from susa.libvirt.network_model import NetworkModel
 
@@ -19,6 +19,8 @@ CAPTURE_DRAIN_TIME = 1
 
 
 class LVNetwork(LVEntity[lv.virNetwork, NetworkModel], Network, Sniffable):
+    state_type = LVEntityState[NetworkModel]
+
     @property
     @override
     def name(self) -> str:
@@ -34,6 +36,10 @@ class LVNetwork(LVEntity[lv.virNetwork, NetworkModel], Network, Sniffable):
     def create(self) -> None:
         assert self.value is None
         self.value = self.conn.networkCreateXML(self.build())
+
+    @override
+    def lookup(self) -> lv.virNetwork:
+        return self.conn.networkLookupByName(self.name)
 
     @override
     def destroy(self) -> None:

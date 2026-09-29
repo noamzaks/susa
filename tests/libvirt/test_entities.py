@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import pickle
 from collections.abc import Generator
 
 import libvirt as lv
+import pydantic
 import pytest
 
 from susa.core.interface import Interface
@@ -20,7 +22,10 @@ from susa.core.network import Network
 from susa.libvirt.connection import Connection
 from susa.libvirt.interface import LVInterface
 from susa.libvirt.interface_model import InterfaceModel
-from susa.libvirt.machine import LVMachine, LVSnapshot
+from susa.libvirt.machine import (
+    LVMachine,
+    LVSnapshot,
+)
 from susa.libvirt.machine_model import MachineModel
 from susa.libvirt.network import LVNetwork
 from susa.libvirt.network_model import NetworkModel
@@ -216,3 +221,65 @@ def test_machine_press() -> None:
         assert isinstance(machine, KeyPressable)
         machine.press([Key.LEFT_CTRL, Key.LEFT_ALT, Key.DELETE])
         machine.type_text("root\n")
+
+
+def test_network_json() -> None:
+    adapter = pydantic.TypeAdapter(LVNetwork)
+    network = LVNetwork(NetworkModel().default().ip("10.0.0.1"))
+    assert adapter.validate_json(adapter.dump_json(network)).value is None
+
+    network.create()
+    restored = adapter.validate_json(adapter.dump_json(network))
+    assert restored.model.build() == network.model.build()
+    assert restored.value is not None and network.value is not None
+    assert restored.value.UUIDString() == network.value.UUIDString()
+    restored.destroy()
+    assert network.name not in Connection.current_conn().listNetworks()
+
+
+def test_machine_json() -> None:
+    adapter = pydantic.TypeAdapter(LVMachine)
+    machine = LVMachine(domain().qemu_args("-cpu", "max"))
+    assert adapter.validate_json(adapter.dump_json(machine)).value is None
+
+    machine.create()
+    restored = adapter.validate_json(adapter.dump_json(machine))
+    assert restored.model.build() == machine.model.build()
+    restored.power_off()
+    assert not machine.is_powered_on
+    restored.destroy()
+    domains = Connection.current_conn().listAllDomains()
+    assert machine.name not in [d.name() for d in domains]
+
+
+def test_machine_from_builder_calls() -> None:
+    uri = Connection.current_conn().getURI()
+    calls = [{"name": "test"}, {"arch": "x86_64"}, "default"]
+    state = {"uri": uri, "model": calls}
+    machine = pydantic.TypeAdapter(LVMachine).validate_python(state)
+    assert (
+        machine.model.build() == MachineModel("test").arch("x86_64").default().build()
+    )
+
+
+def test_snapshot_json() -> None:
+    adapter = pydantic.TypeAdapter(LVSnapshot)
+    with LVMachine(domain()) as machine:
+        snapshot = machine.snapshot()
+        restored = adapter.validate_json(adapter.dump_json(snapshot))
+        assert restored.model.build() == snapshot.model.build()
+        assert restored.machine.name == machine.name
+        machine.power_off()
+        restored.revert()
+        assert machine.is_powered_on
+
+
+def test_pickle() -> None:
+    with LVMachine(domain()) as machine:
+        snapshot = machine.snapshot()
+        restored_machine = pickle.loads(pickle.dumps(machine))
+        assert isinstance(restored_machine, LVMachine)
+        assert restored_machine.is_powered_on
+        restored_snapshot = pickle.loads(pickle.dumps(snapshot))
+        assert isinstance(restored_snapshot, LVSnapshot)
+        assert restored_snapshot.machine.name == machine.name

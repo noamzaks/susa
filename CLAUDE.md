@@ -17,8 +17,8 @@ uses), so the default environment catches anything newer.
 - Lint / format: `uv run ruff check`, `uv run ruff format`
 - Type-check: `uv run mypy` (strict, checks `src` and `tests`, configured in `pyproject.toml`)
 - All pre-commit hooks (what CI runs): `uv run pre-commit run --all-files`. The mypy hook is a local hook that
-  runs `uv run mypy` in the project environment. The ruff hook is pinned to a different ruff version than the
-  dev dependency, so the two can disagree.
+  runs `uv run mypy` in the project environment. The ruff hook's `rev` and the `ruff` dev dependency are pinned
+  to the same version; bump them together.
 - Fast tests: `uv run pytest tests/core tests/communicator tests/libvirt/test_models.py tests/libvirt/test_entities.py tests/utilities`
 - Single test: `uv run pytest "tests/libvirt/test_models.py::test_machine_model_default[mips]"`
 - Update XML snapshots after an intended model change: `uv run pytest tests/libvirt/test_models.py --snapshot-update`
@@ -73,12 +73,31 @@ chainable builder methods that return `Self` (`MachineModel("x").arch("x86_64").
 to XML, `parse(xml)` back, and `get_*()` getters. Getters use the `get_` prefix because the plain names are
 taken by the builder setters, e.g. `arch()` vs `get_arch()`.
 
+Models are pydantic types (`Model.__get_pydantic_core_schema__`): validated from XML or from JSON "builder calls",
+and serialized to XML, so e.g. `pydantic.TypeAdapter(MachineModel).validate_json(...)` builds one, and they can be
+fields of other pydantic types. Builder calls (`susa.utilities.builder`, generic over any class) are a list where a
+string calls a builder method without arguments (`"default"`), and `{method: value}` passes an object's items as
+keyword arguments (`{"efi": {"loader": ..., "nvram": ...}}`), and anything else as the first argument
+(`{"arch": "x86_64"}`, only if the other parameters are optional). `*args` takes a list, and a parameter that's a
+model takes nested calls (it's a pydantic type itself). `builder_calls(cls)` derives the pydantic type from the
+builder methods' signatures (public methods returning `Self`), one `BuilderMethod` per method, as a union
+discriminated by the method name (so errors point at the bad call), so new builder methods are picked up
+automatically; keep their parameters JSON-friendly. Constructor-only settings have builder methods too (`name`,
+`mac`) so JSON can express them.
+
 The LV entities (`LVEntity` in `entity.py`) take and keep a model (`.model`). They build and log its XML at
 INFO in `create()`, and hold the live libvirt object in `.value` (`None` when not created). Entities get
 their libvirt connection from the process-wide "current" `Connection` (`Connection.current_conn()`), so wrap
 usage in `with Connection(uri):`. `Connection` also starts libvirt's default event loop in a background
 thread (`Connection._start_event_loop`), once per process, before the first connection opens. Without it, streams (the serial console)
 never receive data.
+
+Entities are pickled and serialized by their state (`__getstate__`/`__setstate__`, an `LVEntityState`: the connection
+URI and the model; `LVSnapshotState` adds its machine). They're pydantic types too
+(`pydantic.TypeAdapter(LVMachine).dump_json(machine)`), whose schema is their `state_type`. Restoring uses the current
+`Connection` (asserting the same URI) and finds the live object with the entity's `lookup()` (none if libvirt doesn't have it). Serials and streams
+aren't serializable, since they can't outlive their process. `susa.utilities.schema.instance_schema` is the shared
+pydantic glue: instances pass through, anything else goes through a schema, and a function serializes.
 
 `LVMachine` is a persistent domain: `create()` runs `defineXML` and then starts it, and `destroy()` powers it
 off and undefines it, keeping the NVRAM file. A transient domain would vanish on `power_off()`. `LVSerial`

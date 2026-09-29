@@ -37,6 +37,23 @@ class MachineModel(Model[lvdomain.domain]):
             ),
         )
 
+    @classmethod
+    @override
+    def parse(cls, xml: str | bytes) -> Self:
+        # The inverse of `tree`.
+        tree = ET.fromstring(xml)
+        if (commandline := tree.find(f"{{{QEMU_NAMESPACE}}}commandline")) is not None:
+            commandline.tag = "commandline"
+            for arg in commandline:
+                arg.tag = arg.tag.removeprefix(f"{{{QEMU_NAMESPACE}}}")
+        # `pydantic_libvirt` reads PCI address numbers as hexadecimal but writes them in decimal (libvirt reads
+        # both, by their `0x` prefix).
+        for address in tree.iter("address"):
+            for key in ("domain", "bus", "slot", "function"):
+                if (value := address.get(key)) is not None and value.isdigit():
+                    address.set(key, hex(int(value)))
+        return super().parse(ET.tostring(tree))
+
     @override
     def tree(self) -> ET.Element:
         tree = super().tree()
@@ -49,6 +66,11 @@ class MachineModel(Model[lvdomain.domain]):
                 arg.tag = f"qemu:{arg.tag}"
 
         return tree
+
+    def name(self, name: str) -> Self:
+        self.xml_model.name = lvdomain.name(value=name)
+
+        return self
 
     def arch(self, arch: str) -> Self:
         self.xml_model.os = lvdomain.os(
@@ -344,6 +366,11 @@ class SnapshotModel(Model[lvdomainsnapshot.domainsnapshot]):
         self.xml_model = xml_model or lvdomainsnapshot.domainsnapshot(
             name=lvdomainsnapshot.name(value=name or f"susa-{random_id(10)}")
         )
+
+    def name(self, name: str) -> Self:
+        self.xml_model.name = lvdomainsnapshot.name(value=name)
+
+        return self
 
     def get_name(self) -> str:
         assert self.xml_model.name is not None

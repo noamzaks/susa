@@ -21,6 +21,11 @@ class NetworkModel(Model[lvnetwork.network]):
             ip_list=[],
         )
 
+    def name(self, name: str) -> Self:
+        self.xml_model.name = lvnetwork.name(value=name)
+
+        return self
+
     def ip(
         self, address: str, netmask: str = "255.255.255.0", dhcp: bool = True
     ) -> Self:

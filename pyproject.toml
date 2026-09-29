@@ -33,7 +33,7 @@ untyped_calls_exclude = ["pytesseract"]
 [tool.pytest.ini_options]
 addopts = ["--dist", "loadgroup"]
 
-[tool.ruff]
+[tool.ruff.lint]
 ignore = ["UP035", "LOG015"]
 
 [dependency-groups]
@@ -45,7 +45,7 @@ dev = [
     "pytest>=9.1.1",
     "pytest-snapshot>=0.9.0",
     "pytest-xdist>=3.8.0",
-    "ruff>=0.16.3",
+    "ruff==0.16.9",
     "scapy>=2.7.0",
     "types-pexpect>=4.9.0.20260518",
 ]

@@ -23,6 +23,11 @@ class InterfaceModel(Model[lvdomain.devices_interface]):
             mac=lvdomain.mac(address=mac or random_mac(prefix=QEMU_MAC_PREFIX)),
         )
 
+    def mac(self, address: str) -> Self:
+        self.xml_model.mac = lvdomain.mac(address=address)
+
+        return self
+
     def network(self, name: str) -> Self:
         self.xml_model.source = lvdomain.interface_source(network=name)
 
