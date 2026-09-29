@@ -8,14 +8,15 @@ import pydantic_libvirt.domain as lvdomain
 import pydantic_libvirt.domainsnapshot as lvdomainsnapshot
 from typing_extensions import Self, override
 
-from susa.libvirt.arch import ARCH_DEFAULTS, have_kvm
+from susa.libvirt.arch import ARCH_DEFAULTS
 from susa.libvirt.disk_model import DiskModel
 from susa.libvirt.interface_model import InterfaceModel
 from susa.libvirt.model import Model
-from susa.utilities.generic import random_id
+from susa.utilities.generic import have_kvm, random_id
 
 QEMU_NAMESPACE = "http://libvirt.org/schemas/domain/qemu/1.0"
 
+# TODO: remove.
 ET.register_namespace("qemu", QEMU_NAMESPACE)
 
 

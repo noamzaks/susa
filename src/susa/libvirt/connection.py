@@ -5,6 +5,7 @@ from types import TracebackType
 
 import libvirt as lv
 
+# TODO: move the event loop logic into Connection in a clean way.
 _event_loop_lock = threading.Lock()
 _event_loop_started = False
 

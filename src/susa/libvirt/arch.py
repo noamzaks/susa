@@ -1,13 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
-
-from susa.utilities.generic import host_arch
-
-
-def have_kvm(arch: str) -> bool:
-    return arch == host_arch() and Path("/dev/kvm").exists()
 
 
 @dataclass(frozen=True)
@@ -51,8 +44,6 @@ ARCH_DEFAULTS: dict[str, ArchDefaults] = {
     "ppc64le": ArchDefaults(
         "pseries", pcie=False, acpi=False, disk_bus="virtio", video="vga"
     ),
-    # vexpress-a9 has no usable display, so use virt (without highmem, which 32-bit
-    # guests can't handle).
     "armv7l": ArchDefaults(
         "virt",
         acpi=False,
@@ -63,10 +54,6 @@ ARCH_DEFAULTS: dict[str, ArchDefaults] = {
     "riscv64": ArchDefaults(
         "virt", disk_bus="virtio", usb_model="qemu-xhci", nic="virtio"
     ),
-    # True i386 (CPU family 3) crashes any kernel newer than ~2013 outright
-    # ("Kernel requires i486+ for \'invlpg\' and other features"), so this is the
-    # closest a modern kernel gets: family 4 (i486), restricted via a raw arg since
-    # libvirt's <cpu> XML has no family override.
     "i686": ArchDefaults(
         "q35",
         apic=True,

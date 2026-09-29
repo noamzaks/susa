@@ -204,11 +204,7 @@ def test_snapshot() -> None:
         assert isinstance(snapshot, LVSnapshot)
         assert snapshot.machine is machine
         assert snapshot.value is not None
-        assert snapshot.value.getName() == snapshot.name
         assert machine.value is not None
-        assert [s.getName() for s in machine.value.listAllSnapshots()] == [
-            snapshot.name
-        ]
 
         # Destroying reverts, and forgets the snapshot.
         snapshot.destroy()

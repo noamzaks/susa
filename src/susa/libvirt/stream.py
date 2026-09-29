@@ -13,9 +13,6 @@ CHUNK_SIZE = 1 << 16
 
 
 class LVStream(InputOutputStream):
-    """A (non-blocking) libvirt stream, e.g. for a console or a screenshot. Needs libvirt's event loop, which
-    `Connection` starts."""
-
     def __init__(self, conn: lv.virConnect) -> None:
         self.stream = conn.newStream(lv.VIR_STREAM_NONBLOCK)
         self.eof = False
@@ -49,8 +46,8 @@ class LVStream(InputOutputStream):
                 continue
             data = data[sent:]
 
+    # TODO: make OutputStream raise EOFError when there's nothing more to read and then move this implementation to the OutputStream.
     def read_all(self, timeout: float) -> bytes:
-        """Read until the other side ends the stream."""
         deadline = time.time() + timeout
         result = b""
         while not self.eof:

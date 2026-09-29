@@ -21,22 +21,6 @@ class NetworkModel(Model[lvnetwork.network]):
             ip_list=[],
         )
 
-    def get_name(self) -> str:
-        return self.xml_model.name.value
-
-    def get_hosts(self) -> dict[str, str]:
-        """The IPs reserved for MACs by the DHCP server of the network's first IP, keyed by MAC."""
-        ip_list = self.xml_model.ip_list or []
-        dhcp = ip_list[0].dhcp if len(ip_list) > 0 else None
-        if dhcp is None:
-            return {}
-
-        return {h.mac: h.ip for h in dhcp.host_list or [] if h.mac is not None}
-
-    def get_ip(self, mac: str) -> str | None:
-        """The IP reserved for `mac`, if any."""
-        return self.get_hosts().get(mac)
-
     def ip(
         self, address: str, netmask: str = "255.255.255.0", dhcp: bool = True
     ) -> Self:
@@ -129,3 +113,17 @@ class NetworkModel(Model[lvnetwork.network]):
         )
 
         return self
+
+    def get_name(self) -> str:
+        return self.xml_model.name.value
+
+    def get_hosts(self) -> dict[str, str]:
+        ip_list = self.xml_model.ip_list or []
+        dhcp = ip_list[0].dhcp if len(ip_list) > 0 else None
+        if dhcp is None:
+            return {}
+
+        return {h.mac: h.ip for h in dhcp.host_list or [] if h.mac is not None}
+
+    def get_ip(self, mac: str) -> str | None:
+        return self.get_hosts().get(mac)

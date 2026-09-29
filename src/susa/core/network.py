@@ -13,5 +13,4 @@ class Network(Resource):
 
     @property
     @abstractmethod
-    def interfaces(self) -> list[Interface]:
-        """The interfaces (of any machine) that are connected to the network."""
+    def interfaces(self) -> list[Interface]: ...

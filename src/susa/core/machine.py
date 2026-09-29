@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import io
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from functools import cached_property
+from io import BytesIO
+from typing import TYPE_CHECKING
 
 from susa.core.interface import Interface
 from susa.core.resource import Resource
 from susa.core.stream import InputOutputStream
+
+if TYPE_CHECKING:
+    from PIL.ImageFile import ImageFile
 
 
 class Machine(Resource):
@@ -31,20 +38,13 @@ class Machine(Resource):
 
 
 class Snapshot(Resource):
-    """A snapshot of a `Machine`. Destroying it reverts the machine to it."""
-
-    @property
-    @abstractmethod
-    def name(self) -> str: ...
-
     @abstractmethod
     def revert(self) -> None: ...
 
 
 class Snapshottable(ABC):
     @abstractmethod
-    def snapshot(self) -> Snapshot:
-        """Take a snapshot of the machine as it is now."""
+    def snapshot(self) -> Snapshot: ...
 
 
 class Powerable(ABC):
@@ -56,20 +56,16 @@ class Powerable(ABC):
     def power_on(self) -> None: ...
 
     @abstractmethod
-    def power_off(self) -> None:
-        """Turn the machine off immediately, like pulling the plug."""
+    def power_off(self) -> None: ...
 
     @abstractmethod
-    def shutdown(self) -> None:
-        """Ask the machine's OS to shut down. Returns without waiting for it to do so."""
+    def shutdown(self) -> None: ...
 
     @abstractmethod
-    def reboot(self) -> None:
-        """Ask the machine's OS to reboot. Returns without waiting for it to do so."""
+    def reboot(self) -> None: ...
 
     @abstractmethod
-    def reset(self) -> None:
-        """Restart the machine immediately, like pressing its reset button."""
+    def reset(self) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -77,20 +73,27 @@ class Screenshot:
     data: bytes
     mime_type: str | None = None
 
+    @cached_property
+    def image(self) -> ImageFile:
+        from PIL import Image
+
+        return Image.open(BytesIO(self.data))
+
+    @cached_property
+    def text(self) -> str:
+        from pytesseract import image_to_string
+
+        return image_to_string(self.image)
+
 
 class Screenshottable(ABC):
     @abstractmethod
     def screenshot(self) -> Screenshot: ...
 
 
-class Serial(Resource, InputOutputStream):
-    """A connection to a machine's serial console. Output from before it's created is not available."""
+class Serial(Resource, InputOutputStream): ...
 
 
 class SerialAccessible(ABC):
-    """Something with a serial console."""
-
     @abstractmethod
-    def serial(self) -> Serial:
-        """A new, already created, connection to the serial console. Destroy it when done (or use it in a `with`
-        block)."""
+    def serial(self) -> Serial: ...

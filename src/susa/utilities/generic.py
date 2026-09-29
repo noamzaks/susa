@@ -5,6 +5,7 @@ import random
 import string
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 KILO = 1 << 10
 MEGA = KILO << 10
@@ -22,6 +23,10 @@ def host_arch() -> str:
     if machine in ("x86_64", "amd64", "AMD64"):
         return "x86_64"
     raise ValueError(f"Unknown host architecture: {machine!r}")
+
+
+def have_kvm(arch: str) -> bool:
+    return arch == host_arch() and Path("/dev/kvm").exists()
 
 
 def try_wait_for(test: Callable[[], bool], attempts: int | None = None) -> int | None:
@@ -43,10 +48,6 @@ def wait_for(test: Callable[[], bool], attempts: int | None = None) -> int:
 
 
 def wait_until(test: Callable[[float], bool], timeout: float) -> float:
-    """
-    Call `test` with the remaining time until it returns `True`, returning how many seconds that took. Raises
-    `TimeoutError` if `timeout` seconds pass first.
-    """
     start = time.time()
 
     while (remaining := start + timeout - time.time()) > 0:

@@ -38,7 +38,9 @@ ignore = ["UP035"]
 [dependency-groups]
 dev = [
     "mypy>=2.3.0",
+    "pillow>=12.3.0",
     "pre-commit>=4.6.2",
+    "pytesseract>=0.3.13",
     "pytest>=9.1.1",
     "pytest-snapshot>=0.9.0",
     "pytest-xdist>=3.8.0",

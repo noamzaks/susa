@@ -36,11 +36,6 @@ class LVSnapshot(LVEntity[lv.virDomainSnapshot, SnapshotModel], Snapshot):
 
         self.machine = machine
 
-    @property
-    @override
-    def name(self) -> str:
-        return self.model.get_name()
-
     @override
     def create(self) -> None:
         if self.value is None:
@@ -68,12 +63,10 @@ class LVMachine(
     Screenshottable,
     SerialAccessible,
 ):
-    """A persistent libvirt domain: `create` defines and powers it on, `destroy` powers it off and undefines it.
-    (A transient domain would disappear on power off, so it couldn't be powered on again.)"""
-
     def __init__(
         self,
         model: MachineModel,
+        # TODO: I don't want to require this to be passed. Do it as succinctly as you can, but infer the interfaces' networks' and their IP at runtime.
         networks: Iterable[LVNetwork] = (),
         conn: lv.virConnect | None = None,
     ) -> None:
