@@ -11,9 +11,6 @@ from susa.core.stream import InputOutputStream
 
 
 class Terminal(Protocol):
-    """A pexpect-style (bytes) connection to something that reads lines, like a shell or a login prompt. It's also
-    an `InputOutputStream` (e.g. to wait until it's quiet)."""
-
     before: bytes | None
     match: Any
 
@@ -35,15 +32,12 @@ class Terminal(Protocol):
 
 
 class TerminalStream(SpawnBase, InputOutputStream):  # type: ignore[type-arg]
-    """A pexpect spawn as an `InputOutputStream`."""
-
     if TYPE_CHECKING:
-        # Provided by pexpect's `spawn`, or by subclasses.
+
         def send(self, s: str | bytes) -> int: ...
 
     @override
     def read(self, size: int | None = None, timeout: float = 0) -> bytes:
-        # Data `expect` read past its match comes first.
         buffered: bytes = self.buffer
         if buffered:
             data = buffered if size is None else buffered[:size]
@@ -52,8 +46,10 @@ class TerminalStream(SpawnBase, InputOutputStream):  # type: ignore[type-arg]
         try:
             result: bytes = self.read_nonblocking(size or self.maxread, timeout)
             return result
-        except (pexpect.TIMEOUT, pexpect.EOF):
+        except pexpect.TIMEOUT:
             return b""
+        except pexpect.EOF:
+            raise EOFError from None
 
     @override
     def write(self, data: bytes) -> None:
@@ -61,17 +57,13 @@ class TerminalStream(SpawnBase, InputOutputStream):  # type: ignore[type-arg]
 
 
 class ProcessTerminal(TerminalStream, pexpect.spawn):  # type: ignore[type-arg,misc]
-    """A local process (in a pty)."""
-
     def __init__(self, *argv: str, env: dict[str, str] | None = None) -> None:
         super().__init__(argv[0], list(argv[1:]), env=env)
-        # Lines end like a terminal's Enter key does, which is what programs reading raw input expect.
+        # Like a terminal's Enter key, which is what programs reading raw input expect.
         self.linesep = b"\r"
 
 
 class StreamTerminal(TerminalStream):
-    """A terminal over `stream` (e.g. a serial console or a socket). `close` is called when it's closed."""
-
     def __init__(
         self,
         stream: InputOutputStream,
@@ -86,7 +78,10 @@ class StreamTerminal(TerminalStream):
     def read_nonblocking(self, size: int = 1, timeout: float | None = None) -> bytes:
         if timeout is None or timeout == -1:
             timeout = self.timeout or 0
-        return self.stream.read(size, timeout)
+        try:
+            return self.stream.read(size, timeout)
+        except EOFError:
+            raise pexpect.EOF("The stream ended") from None
 
     @override
     def send(self, s: str | bytes) -> int:
@@ -100,6 +95,7 @@ class StreamTerminal(TerminalStream):
     def sendintr(self) -> None:
         self.send(b"\x03")
 
+    @override
     def close(self) -> None:
         if self.on_close is not None:
             self.on_close()

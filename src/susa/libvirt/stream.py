@@ -35,6 +35,8 @@ class LVStream(InputOutputStream):
             if not data:
                 self.eof = True
             result += data
+        if self.eof and not result:
+            raise EOFError
         return result
 
     @override
@@ -46,17 +48,8 @@ class LVStream(InputOutputStream):
                 continue
             data = data[sent:]
 
-    # TODO: make OutputStream raise EOFError when there's nothing more to read and then move this implementation to the OutputStream.
-    def read_all(self, timeout: float) -> bytes:
-        deadline = time.time() + timeout
-        result = b""
-        while not self.eof:
-            if time.time() > deadline:
-                raise TimeoutError(f"The stream didn't end within {timeout} seconds")
-            result += self.read(timeout=deadline - time.time())
-        return result
-
-    def finish(self) -> None:
+    @override
+    def close(self) -> None:
         self.stream.finish()
 
     def abort(self) -> None:

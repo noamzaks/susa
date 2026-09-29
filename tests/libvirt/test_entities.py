@@ -8,7 +8,9 @@ import libvirt as lv
 import pytest
 
 from susa.core.interface import Interface
+from susa.core.keyboard import Key, type_text
 from susa.core.machine import (
+    KeyPressable,
     Machine,
     Powerable,
     Screenshottable,
@@ -77,7 +79,7 @@ def test_network_and_machine_interfaces_match() -> None:
     interface = InterfaceModel(mac=MAC).default("x86_64")
     network.interface(interface)
 
-    with LVNetwork(network) as n, LVMachine(domain(interface), [n]) as m:
+    with LVNetwork(network) as n, LVMachine(domain(interface)) as m:
         assert [(i.mac, i.ip) for i in n.interfaces] == [
             (i.mac, i.ip) for i in m.interfaces
         ]
@@ -105,8 +107,8 @@ def test_machine_interfaces() -> None:
     network.interface(reserved, "10.0.0.10").interface(automatic)
 
     with (
-        LVNetwork(network) as n,
-        LVMachine(domain(reserved, automatic), [n]) as machine,
+        LVNetwork(network),
+        LVMachine(domain(reserved, automatic)) as machine,
     ):
         interfaces = machine.interfaces
         assert all(isinstance(i, Interface) for i in interfaces)
@@ -122,21 +124,20 @@ def test_interface_without_reservation() -> None:
     interface = InterfaceModel(mac=MAC).default("x86_64")
     network.interface(interface)
 
-    with LVNetwork(network) as n, LVMachine(domain(interface), [n]) as machine:
+    with LVNetwork(network), LVMachine(domain(interface)) as machine:
         [result] = machine.interfaces
         assert result.mac == MAC
         assert result.ip is None
 
 
-def test_machine_interfaces_without_networks() -> None:
-    # Without being told about the network, the machine can't know the reserved IP.
+def test_machine_interfaces_found_at_runtime() -> None:
     network = NetworkModel().default().ip("10.0.0.1")
     interface = InterfaceModel(mac=MAC).default("x86_64")
     network.interface(interface, "10.0.0.10")
 
     with LVNetwork(network), LVMachine(domain(interface)) as machine:
         [result] = machine.interfaces
-        assert (result.mac, result.ip) == (MAC, None)
+        assert (result.mac, result.ip) == (MAC, "10.0.0.10")
 
 
 def test_interface() -> None:
@@ -209,3 +210,10 @@ def test_snapshot() -> None:
         # Destroying reverts, and forgets the snapshot.
         snapshot.destroy()
         assert snapshot.value is None
+
+
+def test_machine_press() -> None:
+    with LVMachine(domain()) as machine:
+        assert isinstance(machine, KeyPressable)
+        machine.press([Key.LEFT_CTRL, Key.LEFT_ALT, Key.DELETE])
+        type_text(machine, "root\n")

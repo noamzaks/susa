@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import io
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from functools import cached_property
@@ -12,7 +11,11 @@ from susa.core.resource import Resource
 from susa.core.stream import InputOutputStream
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from PIL.ImageFile import ImageFile
+
+    from susa.core.keyboard import Key
 
 
 class Machine(Resource):
@@ -81,14 +84,20 @@ class Screenshot:
 
     @cached_property
     def text(self) -> str:
-        from pytesseract import image_to_string
+        from pytesseract.pytesseract import image_to_string
 
-        return image_to_string(self.image)
+        text: str = image_to_string(self.image)
+        return text
 
 
 class Screenshottable(ABC):
     @abstractmethod
     def screenshot(self) -> Screenshot: ...
+
+
+class KeyPressable(ABC):
+    @abstractmethod
+    def press(self, keys: Sequence[Key], hold_time: float = 0.1) -> None: ...
 
 
 class Serial(Resource, InputOutputStream): ...

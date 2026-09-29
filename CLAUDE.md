@@ -45,9 +45,14 @@ Two layers:
   - `Screenshottable` (a `Screenshot` of bytes plus an optional MIME type)
   - `SerialAccessible` (`serial()` returns an already created `Serial`, which is a `Resource` and an
     `InputOutputStream`)
-  - `core/stream.py` has `OutputStream` (`read(size, timeout)`, `read_until`, `is_quiet`, and
-    `wait_until_quiet`, which never starts a quiet period that can't fit before its timeout), `InputStream`
-    (`write`) and `InputOutputStream`
+  - `KeyPressable` (`press(keys, hold_time)` holds `Key`s together). `core/keyboard.py` has the `Key` enum
+    (values are Linux input event codes) and `type_text(machine, text)`, which types letters, digits, ASCII
+    symbols, space, `\n`, `\t`, `\b` and ESC as on a US keyboard
+  - `core/stream.py` has `OutputStream` (`read(size, timeout)`, which raises `EOFError` once the stream
+    ended and nothing's left; `read_until`; `read_all` until EOF; `is_quiet`; and `wait_until_quiet`, which
+    never starts a quiet period that can't fit before its timeout), `SavedOutputStream` (keeps what's read),
+    `InputStream` (`write` and `close`) and `InputOutputStream`
+  - `core/interface.py` has `BasicInterface`, a plain `(mac, ip)` value (`LVInterface` is one)
 - **`susa.libvirt`** implements them as `LVMachine` (all of the machine mixins), `LVNetwork`, `LVSnapshot`,
   `LVSerial` and `LVInterface`.
 
@@ -64,7 +69,7 @@ The LV entities (`LVEntity` in `entity.py`) take and keep a model (`.model`). Th
 INFO in `create()`, and hold the live libvirt object in `.value` (`None` when not created). Entities get
 their libvirt connection from the process-wide "current" `Connection` (`Connection.current_conn()`), so wrap
 usage in `with Connection(uri):`. `Connection` also starts libvirt's default event loop in a background
-thread, once per process, before the first connection opens. Without it, streams (the serial console)
+thread (`Connection._start_event_loop`), once per process, before the first connection opens. Without it, streams (the serial console)
 never receive data.
 
 `LVMachine` is a persistent domain: `create()` runs `defineXML` and then starts it, and `destroy()` powers it
@@ -78,9 +83,9 @@ the console pty is only accessible to the `qemu` user, so it can't be opened dir
 `susa.core.communicator` defines three classes. Everything is `bytes`:
 - **`CommandRunner`**: `run(command) -> subprocess.CompletedProcess[bytes]`, and `check`, which returns stdout
   and raises `CalledProcessError` on failure.
-- **`AsyncCommandRunner`**: adds `start(command) -> AsyncCommand`, whose `stdout` and `stderr` are
-  `OutputStream`s, plus `poll`, `wait` (returns the exit code) and `kill`. Its default `run` is `start`, then
-  `wait`, then read both streams.
+- **`AsyncCommandRunner`**: adds `start(command) -> AsyncCommand`, with `stdin` (an `InputStream`),
+  `stdout` and `stderr` (`OutputStream`s), `poll`, `wait` (returns the exit code) and `kill`. Its default `run`
+  is `start`, `stdin.close()`, `wait`, then `read_all` of both streams (a timeout doesn't kill the command).
 - **`FileTransferrer`**: a separate `upload`/`download` mixin.
 
 `susa.communicator` has two layers:
@@ -102,7 +107,7 @@ the console pty is only accessible to the `qemu` user, so it can't be opened dir
   Waiting for quiet is the generic "the other side is done talking" signal, used in place of matching
   specific prompts.
 - **Prelude:** an optional `prelude` gets the terminal before it's a shell. `login(password, username=None)`
-  sends an empty line and the username (if given), then the password, each once the terminal is quiet. That's
+  sends the username (if given), then the password, each once the terminal is quiet. That's
   best-effort for any getty or login program, and for rlogin (password only).
 - **Setup:** `create()` waits for quiet, runs the prelude, and waits for quiet again, using `quiet_time`
   (3 s by default). It has to outlast whatever runs at login and silently waits on the terminal. For
@@ -117,9 +122,11 @@ the console pty is only accessible to the `qemu` user, so it can't be opened dir
 - **`execute(command) -> CompletedProcess`:** the one primitive (stdout and stderr combined). It sends the command, then `echo SUSA-EXIT-$?` on its own line.
   Output is everything before that marker, and the exit code is taken from it. A timeout sends Ctrl-C (which
   also discards the pending marker line), resends the marker, and raises `TimeoutError`.
-- **`start`** (returns a `ShellCommand`): `sh -c <quoted> > out 2> err < /dev/null & echo $!`, in a `mktemp -d` directory. `wait` is
-  the shell's `wait <pid>`, whose status can only be collected once, so it's cached. `poll` is `kill -0`, and
-  `kill` is `kill <pid>`. Streams read with `tail -c +N | head -c SIZE`.
+- **`start`** (returns a `ShellCommand`): `sh -c <quoted> < in > out 2> err & echo $!` in a `mktemp -d`
+  directory, where `in` is a FIFO kept open by a background `sleep` until `stdin.close()` kills it. `stdin`
+  writes are `printf` into the FIFO. `wait` is the shell's `wait <pid>`, whose status can only be collected
+  once, so it's cached. `poll` is `kill -0`, and `kill` is `kill <pid>`. Output streams read with
+  `tail -c +N | head -c SIZE`, and raise `EOFError` once the command exited and everything was read.
 - **Transfer:** `upload` is POSIX `printf` with octal escapes, in lines chained with `&&` and short enough
   for the terminal. No decoder is needed (FreeBSD 10 has no `base64`), and no Ctrl-D, which would end the
   shell. `download` is `cat`.
@@ -131,8 +138,8 @@ services (e.g. rsh-redone rlogind) reverse-resolve clients and drop them otherwi
 
 `susa/libvirt/arch.py` has `ARCH_DEFAULTS`: one `ArchDefaults` per libvirt arch name (machine type, disk bus,
 NIC model, video, GIC, USB controller, TCG CPU, extra raw QEMU args, …). The `MachineModel.default*()` and
-`InterfaceModel.default(arch)` methods read it. Hard-won quirks live there with comments. For example,
-Malta (mips) only gives IRQs to PCI slots 11 and 12, which `MachineModel.next_pci_address()` enforces. KVM
+`InterfaceModel.default(arch)` methods read it. For example, Malta (mips) only gives IRQs to PCI slots 11
+and 12, which `MachineModel.next_pci_address()` enforces. KVM
 is used only when the guest arch equals the host arch and `/dev/kvm` exists; otherwise the domain is
 `qemu` (TCG).
 
@@ -142,10 +149,8 @@ Interfaces get a random `52:54:00:…` MAC when created. `NetworkModel.interface
 an interface to the network and reserves an IP for its MAC as a DHCP `<host>` entry (the first free
 address in the DHCP ranges if none is given). Call it before `MachineModel.interface(...)` and before
 the network is created. This makes a machine's IP known up front, with no waiting on DHCP leases or a
-guest agent. Everything is read from the stored models, not from libvirt. `LVMachine(model, networks=[...])`
-takes the `LVNetwork`s its interfaces connect to, and `LVMachine.interfaces` looks each interface's IP up in
-that network's `NetworkModel`. It's `None` if the network wasn't passed. `LVInterface` is just a `(mac, ip)`
-value. Since libvirt network XML doesn't record attachments, `LVNetwork.interfaces` lists only the interfaces
+guest agent. `LVMachine.interfaces` looks each interface's network up in libvirt at runtime and finds its
+IP in that network's (parsed) XML. `LVInterface` is just a `(mac, ip)` value. Since libvirt network XML doesn't record attachments, `LVNetwork.interfaces` lists only the interfaces
 with reserved IPs.
 
 ### Tests
@@ -161,7 +166,10 @@ with reserved IPs.
   portable. See `/machines/susa-notes/freebsd.md` for how they were built. A module-scoped `base_machine` fixture, parametrized by architecture, boots each image
   from `/machines` on `qemu:///system` once. It waits up to 120 s for ping and then for the serial console to
   go quiet (boot is over). The `ready` fixture then snapshots it, and the function-scoped `machine` fixture reverts to that
-  snapshot after every test, so tests are independent (e.g. the power cycle can run anywhere). The Debian images that boot through GRUB have `GRUB_TIMEOUT=0`. All images run telnet (23) and rlogin
+  snapshot after every test, so tests are independent (e.g. the power cycle can run anywhere). It also
+  patches `machine.serial()` so everything read from the console is saved (`SavedOutputStream`) and attached to
+  the test's report as a "serial" section; `base_machine` prints the boot output. `test_type` logs in on the
+  graphical console by typing and checks a typed `printf` of every symbol over SSH. The Debian images that boot through GRUB have `GRUB_TIMEOUT=0`. All images run telnet (23) and rlogin
   (513) servers from inetd (see `/machines/susa-notes/remote-login.md`). The images have sshd enabled and users `root` and `user`, both with password
   `a`. It needs UEFI firmware for x86_64/aarch64 (`/usr/share/OVMF`, `/usr/share/AAVMF`), and the external
   kernels/initrds under `/machines/debian-*-boot`. Disk clones go through `LinkedClone` in a `0o777` temp
@@ -169,12 +177,23 @@ with reserved IPs.
 
 ## Conventions
 
+- Keep code minimal and succinct:
+  - No docstrings; abstract methods are just `...`.
+  - Comments only where something really isn't clear from the code (rarely).
+  - Prefer simple code over defensive code. Don't add try/except or fallbacks for cases that shouldn't happen;
+    use `assert` sanity checks (e.g. `# Sanity.`) instead of silently tolerating unexpected states.
+  - Remove API that isn't used.
+- Class layout: in models, builder methods first and `get_*` getters at the end.
+- Log with the `logging` module's functions directly (`logging.info(...)`), not per-module loggers.
+- `# type: ignore` without error codes.
+- General helpers go in `susa.utilities` (e.g. `susa.utilities.generic`).
+- Optional/heavy dependencies (e.g. `PIL`, `pytesseract`) are imported lazily inside the function that uses
+  them, with `TYPE_CHECKING` imports for annotations.
 - Code must run on Python 3.10:
   - Every module starts with `from __future__ import annotations` (after any docstring), since forward
     references are otherwise evaluated eagerly.
   - Generics use `TypeVar`/`Generic`, not PEP 695 (`class C[T]` or `type X = ...`).
   - Type aliases use `TypeAlias`.
   - `Self` and `override` come from `typing_extensions`.
-
 - Mark every overriding method with `@override`, imported from `typing_extensions`. mypy's `explicit-override`
   check is enabled, so a missing one fails type-checking.

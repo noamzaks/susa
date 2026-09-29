@@ -22,6 +22,16 @@ class OutputStream(ABC):
             result += self.read(timeout=remaining)
         return result
 
+    def read_all(self, timeout: float) -> bytes:
+        deadline = time.time() + timeout
+        result = b""
+        while time.time() < deadline:
+            try:
+                result += self.read(timeout=deadline - time.time())
+            except EOFError:
+                return result
+        raise TimeoutError(f"The stream didn't end within {timeout} seconds")
+
     def is_quiet(self, duration: float) -> bool:
         return self.read(timeout=duration) == b""
 
@@ -35,7 +45,6 @@ class OutputStream(ABC):
         )
 
 
-# TODO: save the serial output in the tests and show it in the end.
 class SavedOutputStream(OutputStream):
     def __init__(self, stream: OutputStream):
         self.stream = stream
@@ -51,6 +60,9 @@ class SavedOutputStream(OutputStream):
 class InputStream(ABC):
     @abstractmethod
     def write(self, data: bytes) -> None: ...
+
+    @abstractmethod
+    def close(self) -> None: ...
 
 
 class InputOutputStream(OutputStream, InputStream):

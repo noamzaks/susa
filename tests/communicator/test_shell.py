@@ -99,10 +99,11 @@ def test_start_kill(shell: LocalShell) -> None:
         assert_gone(shell, "sleep 3601")
 
 
-def test_run_timeout_kills(shell: LocalShell) -> None:
+def test_run_timeout(shell: LocalShell) -> None:
     with shell:
         with pytest.raises(TimeoutError):
             shell.run("exec sleep 3602", timeout=0.5)
+        shell.execute("pkill -f '^sleep 3602$'")
         assert_gone(shell, "sleep 3602")
 
 
@@ -122,3 +123,16 @@ def test_transfer(shell: LocalShell, tmp_path: Path) -> None:
         shell.download(str(tmp_path / "remote"), tmp_path / "down")
     assert (tmp_path / "remote").read_bytes() == data
     assert (tmp_path / "down").read_bytes() == data
+
+
+def test_start_stdin(shell: LocalShell) -> None:
+    with shell:
+        command = shell.start("cat; echo done")
+        command.stdin.write(b"a\x00\xff\n")
+        assert command.stdout.read_until(b"\n", timeout=5) == b"a\x00\xff\n"
+        assert command.poll() is None
+        command.stdin.close()
+        assert command.wait() == 0
+        assert command.stdout.read_all(timeout=5) == b"done\n"
+        with pytest.raises(EOFError):
+            command.stdout.read()

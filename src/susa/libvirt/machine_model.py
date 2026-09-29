@@ -16,9 +16,6 @@ from susa.utilities.generic import have_kvm, random_id
 
 QEMU_NAMESPACE = "http://libvirt.org/schemas/domain/qemu/1.0"
 
-# TODO: remove.
-ET.register_namespace("qemu", QEMU_NAMESPACE)
-
 
 class MachineModel(Model[lvdomain.domain]):
     xml_model_type = lvdomain.domain
@@ -46,9 +43,10 @@ class MachineModel(Model[lvdomain.domain]):
 
         # `pydantic_libvirt` doesn't know about the QEMU namespace.
         if (commandline := tree.find("commandline")) is not None:
-            commandline.tag = f"{{{QEMU_NAMESPACE}}}commandline"
+            tree.attrib = {"xmlns:qemu": QEMU_NAMESPACE, **tree.attrib}
+            commandline.tag = "qemu:commandline"
             for arg in commandline:
-                arg.tag = f"{{{QEMU_NAMESPACE}}}{arg.tag}"
+                arg.tag = f"qemu:{arg.tag}"
 
         return tree
 

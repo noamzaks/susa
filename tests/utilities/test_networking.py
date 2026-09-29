@@ -12,7 +12,8 @@ def test_ping() -> None:
     single = ping("127.0.0.1")
     assert isinstance(single, float)
 
-    multiple = ping("127.0.0.1", 3, interval=1)
+    # The timeout is for the whole run.
+    multiple = ping("127.0.0.1", 3, timeout=5, interval=1)
     assert len(multiple) == 3
     assert all(isinstance(time, float) for time in multiple)
 

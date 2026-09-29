@@ -14,48 +14,70 @@ from typing_extensions import override
 
 from susa.communicator.terminal import Terminal
 from susa.core.communicator import AsyncCommand, AsyncCommandRunner, FileTransferrer
-from susa.core.stream import OutputStream
+from susa.core.stream import InputStream, OutputStream
 
 EXIT = re.compile(rb"SUSA-EXIT-(\d+)\n")
 MARK_EXIT = b"echo SUSA-EXIT-$?"
-# No line editing (which may reset the terminal's settings), job notifications, echo, output translation (e.g. \n
-# to \r\n) or prompts, so the output of commands is exactly what they wrote.
+# No line editing (which may reset the terminal's settings), job notifications, echo, output translation or
+# prompts, so the output of commands is exactly what they wrote.
 SETUP = b"set +m +o emacs +o vi; stty -echo -opost; PS1=''; PS2=''"
 SETUP_TIMEOUT = 60
 SETUP_ATTEMPT_TIMEOUT = 10
 RECOVERY_QUIET_TIME = 1
 POLL_INTERVAL = 0.2
-UPLOAD_CHUNK_SIZE = 512
+PRINTF_CHUNK_SIZE = 512
 
 Prelude: TypeAlias = Callable[[Terminal], None]
 
 
 def login(password: str, username: str | None = None, quiet_time: float = 3) -> Prelude:
-    """Log in (best-effort, whatever the prompts are) by sending the username (if there's one to give) and then the
-    password, each once the terminal is quiet for `quiet_time` seconds. `quiet_time` should be longer than the login
-    program takes to prompt, since input sent before that is usually discarded."""
     lines = ([username.encode()] if username is not None else []) + [password.encode()]
 
     def prelude(terminal: Terminal) -> None:
         for line in lines:
+            # Input sent before the login program prompts is usually discarded.
             terminal.wait_until_quiet(quiet_time, SETUP_TIMEOUT)
             terminal.sendline(line)
 
     return prelude
 
 
-def printf_format(data: bytes) -> str:
-    """A (single-quotable) `printf` format that prints `data`."""
-    return "".join(
-        chr(b) if chr(b).isalnum() and b < 128 else f"\\{b:03o}" for b in data
-    )
+def printf_lines(data: bytes, target: str) -> list[str]:
+    # Short enough lines for the terminal, with nothing but POSIX `printf`.
+    return [
+        "printf '"
+        + "".join(
+            chr(b) if chr(b).isalnum() and b < 128 else f"\\{b:03o}"
+            for b in data[i : i + PRINTF_CHUNK_SIZE]
+        )
+        + f"' >> {target}"
+        for i in range(0, len(data), PRINTF_CHUNK_SIZE)
+    ]
+
+
+class ShellInputStream(InputStream):
+    def __init__(self, shell: ShellCommunicator, path: str) -> None:
+        self.shell = shell
+        self.path = path
+        # Keeps the FIFO open (so the command doesn't see its end) until it's closed.
+        self.holder: str | None = shell.background(f"sleep 2147483647 > {path}")
+
+    @override
+    def write(self, data: bytes) -> None:
+        self.shell.execute(
+            " &&\n".join(printf_lines(data, self.path))
+        ).check_returncode()
+
+    @override
+    def close(self) -> None:
+        if self.holder is not None:
+            self.shell.execute(f"kill {self.holder}; wait {self.holder}")
+            self.holder = None
 
 
 class ShellOutputStream(OutputStream):
-    """A file being written by a `ShellCommand`, read (from where the last read stopped) through the shell."""
-
-    def __init__(self, shell: ShellCommunicator, path: str) -> None:
-        self.shell = shell
+    def __init__(self, command: ShellCommand, path: str) -> None:
+        self.command = command
         self.path = path
         self.offset = 0
 
@@ -64,24 +86,37 @@ class ShellOutputStream(OutputStream):
         deadline = time.time() + timeout
         head = "" if size is None else f" | head -c {size}"
         while True:
-            data = self.shell.execute(
+            finished = self.command.poll() is not None
+            data = self.command.shell.execute(
                 f"tail -c +{self.offset + 1} {self.path}{head}"
             ).stdout
-            if data or time.time() >= deadline:
+            if data:
                 self.offset += len(data)
                 return data
+            if finished:
+                raise EOFError
+            if time.time() >= deadline:
+                return b""
             time.sleep(POLL_INTERVAL)
 
 
 class ShellCommand(AsyncCommand):
-    """A background job of a `ShellCommunicator`'s shell, with its outputs in files in `directory`."""
-
-    def __init__(self, shell: ShellCommunicator, pid: str, directory: str) -> None:
+    def __init__(self, shell: ShellCommunicator, command: str) -> None:
         self.shell = shell
-        self.pid = pid
+        directory = shlex.quote(shell.execute("mktemp -d").stdout.decode().strip())
+        shell.execute(f"mkfifo {directory}/in").check_returncode()
+        self.pid = shell.background(
+            f"sh -c {shlex.quote(command)} < {directory}/in > {directory}/out 2> {directory}/err"
+        )
         self.exit_code: int | None = None
-        self._stdout = ShellOutputStream(shell, f"{directory}/out")
-        self._stderr = ShellOutputStream(shell, f"{directory}/err")
+        self._stdin = ShellInputStream(shell, f"{directory}/in")
+        self._stdout = ShellOutputStream(self, f"{directory}/out")
+        self._stderr = ShellOutputStream(self, f"{directory}/err")
+
+    @property
+    @override
+    def stdin(self) -> InputStream:
+        return self._stdin
 
     @property
     @override
@@ -107,6 +142,7 @@ class ShellCommand(AsyncCommand):
         # The shell only reports the exit code once.
         if self.exit_code is None:
             self.exit_code = self.shell.execute(f"wait {self.pid}", timeout).returncode
+            self._stdin.close()
         return self.exit_code
 
     @override
@@ -115,14 +151,9 @@ class ShellCommand(AsyncCommand):
 
 
 class ShellCommunicator(AsyncCommandRunner, FileTransferrer):
-    """Runs commands in a POSIX shell over a `Terminal`, assuming little more than POSIX `sh`, `stty` and `mktemp`.
-
-    `prelude` gets the terminal before it's a shell (e.g. to log in). Setting the shell up waits until the terminal
-    is quiet for `quiet_time` seconds, which should be long enough for whatever runs at login (which may silently
-    wait for the terminal) to be done."""
-
     def __init__(self, prelude: Prelude | None = None, quiet_time: float = 3) -> None:
         self.prelude = prelude
+        # Long enough for whatever runs at login (which may silently wait for the terminal) to be done.
         self.quiet_time = quiet_time
         self.terminal: Terminal | None = None
 
@@ -160,8 +191,6 @@ class ShellCommunicator(AsyncCommandRunner, FileTransferrer):
         self.terminal = None
 
     def execute(self, command: str, timeout: float = 60) -> CompletedProcess[bytes]:
-        """Run `command` in the shell itself (so e.g. `cd` affects later commands). Its stdout and stderr are both
-        in the result's `stdout`."""
         assert self.terminal is not None
         self.terminal.sendline(command.encode())
         self.terminal.sendline(MARK_EXIT)
@@ -181,25 +210,20 @@ class ShellCommunicator(AsyncCommandRunner, FileTransferrer):
             command, int(self.terminal.match.group(1)), self.terminal.before
         )
 
-    @override
-    def start(self, command: str) -> ShellCommand:
-        directory = shlex.quote(self.execute("mktemp -d").stdout.decode().strip())
-        started = self.execute(
-            f"sh -c {shlex.quote(command)} > {directory}/out 2> {directory}/err < /dev/null & echo $!"
-        )
+    def background(self, command: str) -> str:
+        started = self.execute(f"{command} & echo $!")
         started.check_returncode()
         # Interactive shells may also print the job number (e.g. "[1] 1234").
-        return ShellCommand(self, started.stdout.split()[-1].decode(), directory)
+        return started.stdout.split()[-1].decode()
+
+    @override
+    def start(self, command: str) -> ShellCommand:
+        return ShellCommand(self, command)
 
     @override
     def upload(self, local: Path, remote: str) -> None:
-        # In lines short enough for the terminal.
         target = shlex.quote(remote)
-        data = local.read_bytes()
-        lines = [f": > {target}"] + [
-            f"printf '{printf_format(data[i : i + UPLOAD_CHUNK_SIZE])}' >> {target}"
-            for i in range(0, len(data), UPLOAD_CHUNK_SIZE)
-        ]
+        lines = [f": > {target}", *printf_lines(local.read_bytes(), target)]
         self.execute(" &&\n".join(lines)).check_returncode()
 
     @override

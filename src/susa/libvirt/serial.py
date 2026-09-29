@@ -38,6 +38,10 @@ class LVSerial(Serial):
         return self.stream.read(size, timeout)
 
     @override
+    def close(self) -> None:
+        self.destroy()
+
+    @override
     def write(self, data: bytes) -> None:
         assert self.stream is not None
         self.stream.write(data)

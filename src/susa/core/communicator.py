@@ -7,7 +7,7 @@ from subprocess import CompletedProcess
 from typing_extensions import override
 
 from susa.core.resource import Resource
-from susa.core.stream import OutputStream
+from susa.core.stream import InputStream, OutputStream
 
 
 class CommandRunner(Resource):
@@ -21,7 +21,9 @@ class CommandRunner(Resource):
 
 
 class AsyncCommand(ABC):
-    # TODO: add `stdin`.
+    @property
+    @abstractmethod
+    def stdin(self) -> InputStream: ...
 
     @property
     @abstractmethod
@@ -48,12 +50,13 @@ class AsyncCommandRunner(CommandRunner):
     @override
     def run(self, command: str, timeout: float = 60) -> CompletedProcess[bytes]:
         async_command = self.start(command)
+        async_command.stdin.close()
         exit_code = async_command.wait(timeout)
         return CompletedProcess(
             command,
             exit_code,
-            async_command.stdout.read(),
-            async_command.stderr.read(),
+            async_command.stdout.read_all(timeout),
+            async_command.stderr.read_all(timeout),
         )
 
 

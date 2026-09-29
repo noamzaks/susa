@@ -2,37 +2,15 @@ from __future__ import annotations
 
 import threading
 from types import TracebackType
+from typing import ClassVar
 
 import libvirt as lv
 
-# TODO: move the event loop logic into Connection in a clean way.
-_event_loop_lock = threading.Lock()
-_event_loop_started = False
-
-
-def _run_event_loop() -> None:
-    while True:
-        lv.virEventRunDefaultImpl()
-
-
-def start_event_loop() -> None:
-    """Run libvirt's default event loop in a background thread (once per process). It has to be registered
-    before connections are opened, and without it streams (e.g. serial consoles) never receive data."""
-    global _event_loop_started
-
-    with _event_loop_lock:
-        if _event_loop_started:
-            return
-
-        lv.virEventRegisterDefaultImpl()
-        threading.Thread(
-            target=_run_event_loop, name="libvirt-events", daemon=True
-        ).start()
-        _event_loop_started = True
-
 
 class Connection:
-    _current: Connection | None = None
+    _current: ClassVar[Connection | None] = None
+    _event_loop_lock: ClassVar[threading.Lock] = threading.Lock()
+    _event_loop_started: ClassVar[bool] = False
 
     def __init__(self, uri: str | None = None) -> None:
         self.uri = uri
@@ -42,7 +20,7 @@ class Connection:
         if self.conn is not None:
             raise ValueError("Cannot open an already opened connection!")
 
-        start_event_loop()
+        Connection._start_event_loop()
         self.conn = lv.open(self.uri)
 
         if Connection._current is None:
@@ -79,3 +57,20 @@ class Connection:
         c = Connection.current()
         assert c.conn is not None
         return c.conn
+
+    @staticmethod
+    def _start_event_loop() -> None:
+        # Streams (e.g. serial consoles) only receive data with an event loop, which has to be registered before
+        # connections are opened.
+        with Connection._event_loop_lock:
+            if Connection._event_loop_started:
+                return
+
+            lv.virEventRegisterDefaultImpl()
+            threading.Thread(target=Connection._run_event_loop, daemon=True).start()
+            Connection._event_loop_started = True
+
+    @staticmethod
+    def _run_event_loop() -> None:
+        while True:
+            lv.virEventRunDefaultImpl()

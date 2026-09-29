@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Sequence
 
 import libvirt as lv
 from typing_extensions import override
 
 from susa.core.interface import Interface
+from susa.core.keyboard import Key
 from susa.core.machine import (
+    KeyPressable,
     Machine,
     Powerable,
     Screenshot,
@@ -18,7 +20,7 @@ from susa.core.machine import (
 from susa.libvirt.entity import LVEntity
 from susa.libvirt.interface import LVInterface
 from susa.libvirt.machine_model import MachineModel, SnapshotModel
-from susa.libvirt.network import LVNetwork
+from susa.libvirt.network_model import NetworkModel
 from susa.libvirt.serial import LVSerial
 from susa.libvirt.stream import LVStream
 
@@ -62,19 +64,8 @@ class LVMachine(
     Powerable,
     Screenshottable,
     SerialAccessible,
+    KeyPressable,
 ):
-    def __init__(
-        self,
-        model: MachineModel,
-        # TODO: I don't want to require this to be passed. Do it as succinctly as you can, but infer the interfaces' networks' and their IP at runtime.
-        networks: Iterable[LVNetwork] = (),
-        conn: lv.virConnect | None = None,
-    ) -> None:
-        """`networks` are the networks the machine's interfaces are connected to, which know their IPs."""
-        super().__init__(model=model, conn=conn)
-
-        self.networks = {n.name: n for n in networks}
-
     @property
     def domain(self) -> lv.virDomain:
         assert self.value is not None, "The machine wasn't created!"
@@ -111,9 +102,11 @@ class LVMachine(
     def interfaces(self) -> list[Interface]:
         result: list[Interface] = []
         for interface in self.model.get_interfaces():
-            mac = interface.get_mac()
-            network = self.networks.get(interface.get_network() or "")
-            ip = network.model.get_ip(mac) if network is not None else None
+            mac, network = interface.get_mac(), interface.get_network()
+            ip = None
+            if network is not None:
+                xml = self.conn.networkLookupByName(network).XMLDesc()
+                ip = NetworkModel.parse(xml).get_ip(mac)
             result.append(LVInterface(mac, ip))
         return result
 
@@ -153,7 +146,7 @@ class LVMachine(
         stream = LVStream(self.conn)
         mime_type = self.domain.screenshot(stream.stream, 0)
         data = stream.read_all(SCREENSHOT_TIMEOUT)
-        stream.finish()
+        stream.close()
         return Screenshot(data=data, mime_type=mime_type)
 
     @override
@@ -161,3 +154,10 @@ class LVMachine(
         result = LVSerial(domain=self.domain, conn=self.conn)
         result.create()
         return result
+
+    @override
+    def press(self, keys: Sequence[Key], hold_time: float = 0.1) -> None:
+        codes = [key.value for key in keys]
+        self.domain.sendKey(
+            lv.VIR_KEYCODE_SET_LINUX, round(hold_time * 1000), codes, len(codes), 0
+        )

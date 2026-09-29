@@ -7,6 +7,8 @@ from susa.libvirt.arch import ARCH_DEFAULTS
 from susa.libvirt.model import Model
 from susa.utilities.networking import random_mac
 
+QEMU_MAC_PREFIX = "52:54:00"
+
 
 class InterfaceModel(Model[lvdomain.devices_interface]):
     xml_model_type = lvdomain.devices_interface
@@ -18,8 +20,7 @@ class InterfaceModel(Model[lvdomain.devices_interface]):
     ) -> None:
         self.xml_model = xml_model or lvdomain.devices_interface(
             type="network",
-            # TODO: extract this prefix to a constant named appropriately.
-            mac=lvdomain.mac(address=mac or random_mac(prefix="52:54:00")),
+            mac=lvdomain.mac(address=mac or random_mac(prefix=QEMU_MAC_PREFIX)),
         )
 
     def network(self, name: str) -> Self:

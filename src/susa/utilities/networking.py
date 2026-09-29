@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import math
 import random
 import re
 import subprocess
-import time
 from typing import Literal, overload
 
 from susa.utilities.generic import wait_until
@@ -13,7 +11,7 @@ PING_REPLY_PATTERN = re.compile(r"icmp_seq=(\d+)\b.*?\btime=([\d.]+) ms")
 
 
 @overload
-def ping(
+def ping(  # type: ignore
     host: str,
     count: Literal[1] = 1,
     timeout: float | None = 1,
@@ -34,21 +32,26 @@ def ping(
     host: str, count: int = 1, timeout: float | None = 1, interval: int | None = None
 ) -> list[float | None] | float | None:
     command = ["ping", "-n", "-c", str(count)]
-    if timeout is not None:
-        command += ["-w", str(math.floor(timeout))]
     if interval is not None:
         command += ["-i", str(interval)]
     command.append(host)
 
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
-    # ping exits with 1 when some replies are missing, and with other codes on actual errors.
-    if result.returncode not in (0, 1):
-        raise subprocess.CalledProcessError(
-            result.returncode, command, result.stdout, result.stderr
+    try:
+        result = subprocess.run(
+            command, capture_output=True, check=False, timeout=timeout
         )
+    except subprocess.TimeoutExpired as e:
+        output = e.stdout or b""
+    else:
+        # ping exits with 1 when some replies are missing, and with other codes on actual errors.
+        if result.returncode not in (0, 1):
+            raise subprocess.CalledProcessError(
+                result.returncode, command, result.stdout, result.stderr
+            )
+        output = result.stdout
 
     times: list[float | None] = [None] * count
-    for match in PING_REPLY_PATTERN.finditer(result.stdout):
+    for match in PING_REPLY_PATTERN.finditer(output.decode()):
         index = int(match.group(1)) - 1
         time = float(match.group(2))
 

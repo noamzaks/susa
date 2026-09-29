@@ -3,11 +3,13 @@ from __future__ import annotations
 import random
 import shutil
 import subprocess
+import time
 from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import Literal
 
 import pytest
+from typing_extensions import override
 
 from susa import tmp_dir_path
 from susa.communicator.rlogin import RloginCommunicator
@@ -15,6 +17,9 @@ from susa.communicator.serial import SerialCommunicator
 from susa.communicator.shell import ShellCommunicator, login
 from susa.communicator.ssh import SSHCommunicator
 from susa.communicator.telnet import TelnetCommunicator
+from susa.core.keyboard import type_text
+from susa.core.machine import Serial
+from susa.core.stream import SavedOutputStream
 from susa.libvirt.connection import Connection
 from susa.libvirt.disk_model import DiskModel
 from susa.libvirt.interface_model import InterfaceModel
@@ -23,7 +28,7 @@ from susa.libvirt.machine_model import MachineModel
 from susa.libvirt.network import LVNetwork
 from susa.libvirt.network_model import NetworkModel
 from susa.linked_clone import LinkedClone
-from susa.utilities.generic import GIGA
+from susa.utilities.generic import GIGA, wait_until
 from susa.utilities.networking import ping, wait_until_ping
 
 MACHINES = Path("/machines")
@@ -202,7 +207,6 @@ def connection() -> Generator[None, None, None]:
 def base_machine(
     request: pytest.FixtureRequest, connection: None
 ) -> Generator[LVMachine, None, None]:
-    """A booted machine of each architecture: answering ping, with a quiet serial console."""
     arch: str = request.param
     if not DISKS[arch].exists():
         pytest.skip(f"{DISKS[arch]} doesn't exist")
@@ -215,11 +219,15 @@ def base_machine(
         )
         domain = ARCHITECTURES[arch](Path(clone.path), tmp, network)
 
-        with LVNetwork(network) as n, LVMachine(domain, [n]) as machine:
+        with LVNetwork(network), LVMachine(domain) as machine:
             wait_until_ping(machine.ip, timeout=BOOT_TIMEOUT)
             # Machines may answer ping before they're done booting, which ends with the console going quiet.
             with machine.serial() as serial:
-                serial.wait_until_quiet(QUIET_TIME, BOOT_TIMEOUT)
+                boot = SavedOutputStream(serial)
+                try:
+                    boot.wait_until_quiet(QUIET_TIME, BOOT_TIMEOUT)
+                finally:
+                    print(boot.data.decode(errors="backslashreplace"))
             yield machine
 
 
@@ -228,12 +236,54 @@ def ready(base_machine: LVMachine) -> LVSnapshot:
     return base_machine.snapshot()
 
 
+class SavedSerial(Serial):
+    def __init__(self, serial: Serial) -> None:
+        self.serial = serial
+        self.saved = SavedOutputStream(serial)
+
+    @override
+    def create(self) -> None:
+        self.serial.create()
+
+    @override
+    def destroy(self) -> None:
+        self.serial.destroy()
+
+    @override
+    def read(self, size: int | None = None, timeout: float = 0) -> bytes:
+        return self.saved.read(size, timeout)
+
+    @override
+    def write(self, data: bytes) -> None:
+        self.serial.write(data)
+
+    @override
+    def close(self) -> None:
+        self.serial.close()
+
+
 @pytest.fixture
 def machine(
-    base_machine: LVMachine, ready: LVSnapshot
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+    base_machine: LVMachine,
+    ready: LVSnapshot,
 ) -> Generator[LVMachine, None, None]:
-    """`base_machine`, reverted to when it was ready after the test."""
+    # Everything read from the serial console is shown in the report.
+    serials: list[SavedSerial] = []
+    open_serial = base_machine.serial
+
+    def serial() -> Serial:
+        serials.append(SavedSerial(open_serial()))
+        return serials[-1]
+
+    monkeypatch.setattr(base_machine, "serial", serial)
     yield base_machine
+    request.node.add_report_section(
+        "call",
+        "serial",
+        b"".join(s.saved.data for s in serials).decode(errors="backslashreplace"),
+    )
     ready.revert()
 
 
@@ -345,3 +395,32 @@ def test_power_cycle(machine: LVMachine) -> None:
     assert machine.is_powered_on
     # Booting may take longer than usual while other machines run in parallel.
     wait_until_ping(machine.ip, timeout=2 * BOOT_TIMEOUT)
+
+
+def test_type(machine: LVMachine) -> None:
+    text = r"""Az09 !@#$%^&*()-_=+[]{}\|;:",.<>/?`~"""
+    with SSHCommunicator(machine.ip, "root", "a") as ssh:
+
+        def console_session() -> bool:
+            return any(
+                b"root" in line and b"pts" not in line
+                for line in ssh.check("who").splitlines()
+            )
+
+        # The console has no output to wait for, and login discards a password typed before its prompt, so retry.
+        for _ in range(5):
+            type_text(machine, "root\n")
+            wait_until(lambda _: ssh.execute("pgrep -x login").returncode == 0, 30)
+            time.sleep(3)
+            type_text(machine, "a\n")
+            try:
+                wait_until(lambda _: console_session(), 30)
+                break
+            except TimeoutError:
+                continue
+        assert console_session()
+
+        type_text(machine, f"printf '%s\\n' '{text}' > /tmp/typed\n")
+        wait_until(
+            lambda _: ssh.execute("cat /tmp/typed").stdout == f"{text}\n".encode(), 60
+        )
