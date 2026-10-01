@@ -14,6 +14,7 @@ from susa.libvirt.interface_model import InterfaceModel
 from susa.libvirt.model import Model
 from susa.utilities.generic import have_kvm, random_id
 
+# TODO: I have updated pydantic-libvirt so this should no longer be required. Please remove this hack.
 QEMU_NAMESPACE = "http://libvirt.org/schemas/domain/qemu/1.0"
 
 

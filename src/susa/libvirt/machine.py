@@ -129,7 +129,8 @@ class LVMachine(
     def interfaces(self) -> list[Interface]:
         result: list[Interface] = []
         for interface in self.model.get_interfaces():
-            mac, network = interface.get_mac(), interface.get_network()
+            mac = interface.get_mac()
+            network = interface.get_network()
             ip = None
             if network is not None:
                 xml = self.conn.networkLookupByName(network).XMLDesc()
@@ -184,7 +185,11 @@ class LVMachine(
 
     @override
     def press(self, keys: Sequence[Key], hold_time: float = 0.1) -> None:
-        codes = [key.value for key in keys]
+        key_codes = [key.value for key in keys]
         self.domain.sendKey(
-            lv.VIR_KEYCODE_SET_LINUX, round(hold_time * 1000), codes, len(codes), 0
+            lv.VIR_KEYCODE_SET_LINUX,
+            round(hold_time * 1000),
+            key_codes,
+            len(key_codes),
+            0,
         )

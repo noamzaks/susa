@@ -30,6 +30,7 @@ def builder_calls(cls: type[T]) -> Any:
         and typing.get_type_hints(function).get("return") is Self
     ]
     call: Any = Annotated[
+        # TODO: Function calls are not allowed in type expressions
         functools.reduce(operator.or_, (m.type for m in methods)),
         pydantic.Discriminator(method_name),
     ]
@@ -71,11 +72,13 @@ class BuilderMethod:
         self.arguments = pydantic.create_model(
             f"{owner.__name__}_{name}_arguments", __config__=FORBID_EXTRA, **self.fields
         )
+        # TODO: Function calls are not allowed in type expressions
         self.type = Annotated[self.call_type(), pydantic.Tag(name)]
 
     # A call is `{name: value}`, or just `name` if every parameter is optional.
     def call_type(self) -> Any:
         call: Any = Annotated[
+            # TODO: Function calls are not allowed in type expressions
             pydantic.create_model(
                 f"{self.owner.__name__}_{self.name}",
                 __config__=FORBID_EXTRA,
@@ -85,6 +88,7 @@ class BuilderMethod:
         ]
         if all(self.optional):
             call |= Annotated[
+                # TODO: Type arguments for `Literal` must be `None`, a literal value, or an enum member
                 Literal[self.name],
                 pydantic.AfterValidator(lambda _: self.call(self.arguments())),
             ]
