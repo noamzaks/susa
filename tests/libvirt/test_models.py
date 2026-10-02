@@ -18,7 +18,6 @@ from susa.libvirt.machine_model import MachineModel, SnapshotModel
 from susa.libvirt.network_model import NetworkModel
 from susa.utilities.generic import GIGA
 
-ARCHITECTURES = ("x86_64", "aarch64", "mips", "ppc64le", "armv7l", "riscv64", "i686")
 MAC = "52:54:00:12:34:56"
 
 
@@ -70,16 +69,16 @@ def test_snapshot_model_empty(snapshot: Snapshot) -> None:
     snapshot.assert_match(xml, "snapshot.xml")
 
 
-@pytest.mark.parametrize("arch", ARCHITECTURES)
+@pytest.mark.parametrize("arch", ARCH_DEFAULTS)
 def test_machine_model_default(snapshot: Snapshot, arch: str) -> None:
     disk = DiskModel().source("somewhere")
     xml = MachineModel("test").arch(arch).default().disk(disk).build()
     snapshot.assert_match(xml, "domain.xml")
 
 
-@pytest.mark.parametrize("arch", ARCHITECTURES)
+@pytest.mark.parametrize("arch", ARCH_DEFAULTS)
 def test_machine_model_default_interface(snapshot: Snapshot, arch: str) -> None:
-    interface = InterfaceModel(mac=MAC).default(arch)
+    interface = InterfaceModel(mac=MAC)
     NetworkModel("test").default().interface(interface)
     xml = MachineModel("test").arch(arch).default().interface(interface).build()
     snapshot.assert_match(xml, "domain.xml")
@@ -90,9 +89,8 @@ def test_network_model_default(snapshot: Snapshot) -> None:
     snapshot.assert_match(xml, "network.xml")
 
 
-@pytest.mark.parametrize("arch", ARCHITECTURES)
-def test_interface_model_default(snapshot: Snapshot, arch: str) -> None:
-    xml = InterfaceModel(mac=MAC).default(arch).build()
+def test_interface_model_with_model(snapshot: Snapshot) -> None:
+    xml = InterfaceModel(mac=MAC).model("virtio").build()
     snapshot.assert_match(xml, "interface.xml")
 
 
@@ -108,7 +106,7 @@ def test_disk_model_with_source(snapshot: Snapshot) -> None:
 
 
 def test_machine_model_full(snapshot: Snapshot) -> None:
-    interface = InterfaceModel(mac=MAC).default("x86_64")
+    interface = InterfaceModel(mac=MAC)
     NetworkModel("test").default().ip("10.0.0.1").interface(interface, "10.0.0.10")
     disk = DiskModel().source("somewhere")
     xml = (
@@ -117,7 +115,7 @@ def test_machine_model_full(snapshot: Snapshot) -> None:
         .default()
         .memory(4 * GIGA)
         .cpu(2)
-        .efi("loader", "nvram")
+        .efi()
         .kernel("vmlinux", "initrd.gz", "console=ttyS0 root=/dev/sda1")
         .interface(interface)
         .disk(disk)
@@ -146,23 +144,16 @@ def test_interface_model_random_mac() -> None:
 
 
 def test_interface_model_parse_keeps_mac() -> None:
-    xml = InterfaceModel(mac=MAC).default("x86_64").build()
+    xml = InterfaceModel(mac=MAC).model("e1000").build()
     interface = InterfaceModel.parse(xml)
     assert interface.xml_model.mac is not None
     assert interface.xml_model.mac.address == MAC
 
 
-@pytest.mark.parametrize("arch", ARCHITECTURES)
+@pytest.mark.parametrize("arch", ARCH_DEFAULTS)
 def test_machine_model_interface_default_nic(arch: str) -> None:
     machine = MachineModel("test").arch(arch).interface(InterfaceModel(mac=MAC))
     [interface] = machine.get_interfaces()
-    assert interface.xml_model.model is not None
-    assert interface.xml_model.model.type == ARCH_DEFAULTS[arch].nic
-
-
-@pytest.mark.parametrize("arch", ARCHITECTURES)
-def test_interface_model_default_nic(arch: str) -> None:
-    interface = InterfaceModel(mac=MAC).default(arch)
     assert interface.xml_model.model is not None
     assert interface.xml_model.model.type == ARCH_DEFAULTS[arch].nic
 
@@ -223,7 +214,7 @@ def test_network_model_interface_no_free_ip() -> None:
 
 
 def test_machine_model_interface_keeps_address() -> None:
-    interface = InterfaceModel(mac=MAC).default("mips")
+    interface = InterfaceModel(mac=MAC)
     domain = MachineModel("test").arch("mips").default().interface(interface)
     assert interface.xml_model.address is not None
     assert interface.xml_model.address.slot == 12
@@ -307,10 +298,10 @@ def test_machine_model_from_recipe() -> None:
             "default",
             {"memory": 4 * GIGA},
             {"cpu": 2},
-            {"efi": {"loader": "loader", "nvram": "nvram"}},
+            {"efi": {"secure_boot": True}},
             {"kernel": {"kernel": "vmlinux", "cmdline": "console=ttyS0"}},
             {"disk": [{"source": "somewhere"}]},
-            {"interface": [{"mac": MAC}, {"network": "test"}, {"default": "x86_64"}]},
+            {"interface": [{"mac": MAC}, {"network": "test"}]},
             {"qemu_args": ["-cpu", "max"]},
         ]
     )
@@ -320,10 +311,10 @@ def test_machine_model_from_recipe() -> None:
         .default()
         .memory(4 * GIGA)
         .cpu(2)
-        .efi("loader", "nvram")
+        .efi(secure_boot=True)
         .kernel("vmlinux", cmdline="console=ttyS0")
         .disk(DiskModel().source("somewhere"))
-        .interface(InterfaceModel(mac=MAC).network("test").default("x86_64"))
+        .interface(InterfaceModel(mac=MAC).network("test"))
         .qemu_args("-cpu", "max")
     )
     assert machine.build() == expected.build()
@@ -355,7 +346,7 @@ def test_network_model_from_recipe() -> None:
         ["unknown"],
         [{"arch": "x86_64", "cpu": 2}],
         [{"efi": {"loader": "loader"}}],
-        [{"efi": {"loader": "loader", "nvram": "nvram", "extra": 1}}],
+        [{"efi": {"secure_boot": "maybe"}}],
         [{"memory": "a lot"}],
         ["arch"],
     ),
@@ -386,7 +377,7 @@ def test_model_json() -> None:
     assert adapter.validate_json(adapter.dump_json(machine)).build() == machine.build()
 
 
-@pytest.mark.parametrize("arch", ARCHITECTURES)
+@pytest.mark.parametrize("arch", ARCH_DEFAULTS)
 def test_machine_model_parse(arch: str) -> None:
     xml = MachineModel("test").arch(arch).default().qemu_args("-cpu", "max").build()
     assert MachineModel.parse(xml).build() == xml

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Sequence
 from typing import cast
 
@@ -19,9 +20,10 @@ from susa.core.machine import (
 )
 from susa.libvirt.entity import LVEntity, LVEntityState
 from susa.libvirt.interface import LVInterface
+from susa.libvirt.interface_model import InterfaceModel
 from susa.libvirt.machine_model import MachineModel, SnapshotModel
 from susa.libvirt.network_model import NetworkModel
-from susa.libvirt.serial import LVSerial
+from susa.libvirt.serial import LVConsole, LVSerial
 from susa.libvirt.stream import LVStream
 
 SCREENSHOT_TIMEOUT = 60
@@ -63,6 +65,11 @@ class LVSnapshot(LVEntity[lv.virDomainSnapshot, SnapshotModel], Snapshot):
         return self.machine.domain.snapshotLookupByName(self.model.get_name())
 
     @override
+    def revert(self) -> None:
+        assert self.value is not None
+        self.machine.domain.revertToSnapshot(self.value)
+
+    @override
     def serialize(self) -> LVSnapshotState:
         return {**super().serialize(), "machine": self.machine}
 
@@ -70,12 +77,9 @@ class LVSnapshot(LVEntity[lv.virDomainSnapshot, SnapshotModel], Snapshot):
     @override
     def restore(cls, state: LVEntityState[SnapshotModel]) -> Self:
         snapshot = cast(LVSnapshotState, state)
-        return cls(snapshot["machine"], snapshot["model"]).reconnect(snapshot["uri"])
-
-    @override
-    def revert(self) -> None:
-        assert self.value is not None
-        self.machine.domain.revertToSnapshot(self.value)
+        result = cls(snapshot["machine"], snapshot["model"])
+        result.reconnect(snapshot["uri"])
+        return result
 
 
 class LVMachine(
@@ -89,6 +93,10 @@ class LVMachine(
 ):
     state_type = LVEntityState[MachineModel]
 
+    def __init__(self, model: MachineModel, conn: lv.virConnect | None = None) -> None:
+        super().__init__(model, conn)
+        self.console = LVConsole(self)
+
     @property
     def domain(self) -> lv.virDomain:
         assert self.value is not None, "The machine wasn't created!"
@@ -99,15 +107,19 @@ class LVMachine(
     def name(self) -> str:
         return self.model.get_name()
 
+    @property
+    @override
+    def interfaces(self) -> list[Interface]:
+        return [
+            LVInterface(interface.get_mac(), self.reserved_ip(interface))
+            for interface in self.model.get_interfaces()
+        ]
+
     @override
     def create(self) -> None:
         assert self.value is None
         self.value = self.conn.defineXML(self.xml())
         self.value.create()
-
-    @override
-    def lookup(self) -> lv.virDomain:
-        return self.conn.lookupByName(self.name)
 
     @override
     def destroy(self) -> None:
@@ -118,25 +130,15 @@ class LVMachine(
             lv.VIR_DOMAIN_UNDEFINE_MANAGED_SAVE
             | lv.VIR_DOMAIN_UNDEFINE_SNAPSHOTS_METADATA
         )
-        if self.model.get_nvram() is not None:
-            # The UEFI variables file belongs to whoever built the model, so leave it alone.
-            flags |= lv.VIR_DOMAIN_UNDEFINE_KEEP_NVRAM
+        if self.model.get_firmware() == "efi":
+            # Its copy of the UEFI variables too.
+            flags |= lv.VIR_DOMAIN_UNDEFINE_NVRAM
         self.domain.undefineFlags(flags)
         self.value = None
 
-    @property
     @override
-    def interfaces(self) -> list[Interface]:
-        result: list[Interface] = []
-        for interface in self.model.get_interfaces():
-            mac = interface.get_mac()
-            network = interface.get_network()
-            ip = None
-            if network is not None:
-                xml = self.conn.networkLookupByName(network).XMLDesc()
-                ip = NetworkModel.parse(xml).get_ip(mac)
-            result.append(LVInterface(mac, ip))
-        return result
+    def lookup(self) -> lv.virDomain:
+        return self.conn.lookupByName(self.name)
 
     @override
     def snapshot(self) -> LVSnapshot:
@@ -177,7 +179,7 @@ class LVMachine(
 
     @override
     def serial(self) -> LVSerial:
-        return LVSerial(self)
+        return LVSerial(self.console)
 
     @override
     def press(self, keys: Sequence[Key], hold_time: float = 0.1) -> None:
@@ -189,3 +191,14 @@ class LVMachine(
             len(key_codes),
             0,
         )
+        # libvirt returns before they're released, and the next keys would queue up behind them.
+        time.sleep(hold_time)
+
+    # The IP its network reserved for the interface (see `NetworkModel.interface`).
+    def reserved_ip(self, interface: InterfaceModel) -> str | None:
+        network = interface.get_network()
+        if network is None:
+            return None
+
+        xml = self.conn.networkLookupByName(network).XMLDesc()
+        return NetworkModel.parse(xml).get_ip(interface.get_mac())

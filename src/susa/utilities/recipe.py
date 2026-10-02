@@ -1,103 +1,147 @@
 from __future__ import annotations
 
+import functools
 import inspect
+import operator
 import typing
-from collections.abc import Callable, Iterator
-from typing import Any, TypeVar
+from collections.abc import Callable, Mapping
+from typing import Any, cast
 
+import pydantic
 from pydantic.experimental.arguments_schema import generate_arguments_schema
+from pydantic.json_schema import GenerateJsonSchema, JsonSchemaValue
 from pydantic_core import core_schema
-from typing_extensions import Self, TypeAlias
+from typing_extensions import Self, override
 
-T = TypeVar("T")
+# A recipe makes an object of a class from JSON. A class with builder methods (public methods returning `Self`) is
+# made by builder steps, e.g. `[{"arch": "x86_64"}, "default", {"memory": 1073741824}]`, where a step is
+# `{method: arguments}`, with an object of arguments by name or else just the first argument, or only the method's
+# name if it needs none. Any other class is made from its constructor's arguments by name, e.g. `{"username": "root"}`.
+# Any argument can be a reference to an object made elsewhere (see `resolve`), which is how arguments that aren't
+# JSON (e.g. a machine) are given.
 
-Method: TypeAlias = Callable[..., Any]
-Step: TypeAlias = Callable[[Any], object]
-Arguments: TypeAlias = tuple[tuple[Any, ...], dict[str, Any]]
-
-# A recipe builds an object by calling its builder methods (public methods returning `Self`) in order, e.g.
-# `[{"arch": "x86_64"}, "default", {"efi": {"loader": ..., "nvram": ...}}]`. A step is `{method: arguments}`, with
-# an object of arguments by name or else just the first argument, or only the method's name if it needs none.
+REFERENCE = core_schema.typed_dict_schema(
+    {"$ref": core_schema.typed_dict_field(core_schema.str_schema())},
+    extra_behavior="forbid",
+    ref="Reference",
+)
 
 
-def recipe_schema(cls: type[T]) -> core_schema.CoreSchema:
-    def cook(steps: list[Step]) -> T:
-        result = cls()
-        for step in steps:
-            step(result)
-        return result
+# The recipe, with its references to `objects` replaced by them: `{"$ref": "name"}`, or an attribute of one,
+# `{"$ref": "name.attribute"}`.
+def resolve(recipe: Any, objects: Mapping[str, Any]) -> Any:
+    match recipe:
+        case {"$ref": str(reference)} if len(recipe) == 1:
+            name, *attributes = reference.split(".")
+            if name not in objects:
+                raise ValueError(f"Unknown reference {reference!r}")
+            return functools.reduce(getattr, attributes, objects[name])
+        case dict():
+            return {key: resolve(value, objects) for key, value in recipe.items()}
+        case list():
+            return [resolve(value, objects) for value in recipe]
+    return recipe
+
+
+def recipe_schema(cls: type[Any]) -> core_schema.CoreSchema:
+    builders = {
+        name: method
+        for name, method in inspect.getmembers(cls, inspect.isfunction)
+        if not name.startswith("_")
+        and typing.get_type_hints(method).get("return") is Self
+    }
+    if not builders:
+        return core_schema.call_schema(arguments_schema(cls.__init__), cls)
 
     step = core_schema.tagged_union_schema(
-        {name: step_schema(name, method) for name, method in builder_methods(cls)},
-        discriminator=step_name,
+        {name: step_schema(name, method) for name, method in builders.items()},
+        discriminator=single_key,
     )
-    # There's no going back from the cooked object to its recipe, so it's serialized as it is.
+    # There's no going back from the built object to its recipe, so it's serialized as it is.
     return core_schema.no_info_after_validator_function(
-        cook,
+        lambda steps: functools.reduce(lambda result, s: s(result), steps, cls()),
         core_schema.list_schema(step),
         serialization=core_schema.simple_ser_schema("any"),
     )
 
 
-def builder_methods(cls: type[Any]) -> Iterator[tuple[str, Method]]:
-    for name, method in inspect.getmembers(cls, inspect.isfunction):
-        if (
-            not name.startswith("_")
-            and typing.get_type_hints(method).get("return") is Self
-        ):
-            yield name, method
-
-
-def step_name(step: Any) -> str | None:
-    if isinstance(step, dict) and len(step) == 1:
-        step = next(iter(step))
-    return step if isinstance(step, str) else None
-
-
-def step_schema(name: str, method: Method) -> core_schema.CoreSchema:
-    with_arguments = core_schema.no_info_after_validator_function(
-        lambda step: bind(method, step[name]),
+# `{name: schema}`, validated into what `schema` validates.
+def keyed_schema(name: str, schema: core_schema.CoreSchema) -> core_schema.CoreSchema:
+    return core_schema.no_info_after_validator_function(
+        operator.itemgetter(name),
         core_schema.typed_dict_schema(
-            {name: core_schema.typed_dict_field(arguments_schema(method))},
-            extra_behavior="forbid",
+            {name: core_schema.typed_dict_field(schema)}, extra_behavior="forbid"
         ),
     )
-    if needs_arguments(method):
+
+
+# The key of a single-key object, or a string.
+def single_key(value: Any) -> str | None:
+    if isinstance(value, dict) and len(value) == 1:
+        [value] = value
+    return value if isinstance(value, str) else None
+
+
+# A step, validated into a call of the method on the object being built.
+def step_schema(name: str, method: Callable[..., Any]) -> core_schema.CoreSchema:
+    arguments = arguments_schema(method)
+    call = functools.partial(operator.methodcaller, name)
+    with_arguments = keyed_schema(
+        name, core_schema.call_schema(first_or_by_name(arguments), call)
+    )
+    _, *parameters = inspect.signature(method).parameters.values()
+    if any(p.default is p.empty and p.kind is not p.VAR_POSITIONAL for p in parameters):
         return with_arguments
     only_name = core_schema.no_info_after_validator_function(
-        lambda _: bind(method, ((), {})), core_schema.literal_schema([name])
+        lambda _: call(), core_schema.literal_schema([name])
     )
     return core_schema.union_schema([with_arguments, only_name])
 
 
-def arguments_schema(method: Method) -> core_schema.CoreSchema:
-    by_name = generate_arguments_schema(
-        method, parameters_callback=lambda index, *_: "skip" if index == 0 else None
-    )
-    if not by_name["arguments_schema"]:
-        return by_name
-    first = by_name["arguments_schema"][0]
-    first_schema = first["schema"]
+# Arguments by name, or else just the first one.
+def first_or_by_name(
+    arguments: core_schema.ArgumentsV3Schema,
+) -> core_schema.CoreSchema:
+    if not arguments["arguments_schema"]:
+        return arguments
+    first = arguments["arguments_schema"][0]
+    schema = first["schema"]
     if first["mode"] == "var_args":
-        first_schema = core_schema.list_schema(first_schema)
-    only_first = core_schema.no_info_before_validator_function(
-        lambda value: {first["name"]: value},
-        by_name,
-        json_schema_input_schema=first_schema,
-    )
-    return core_schema.tagged_union_schema(
-        {"by_name": by_name, "first": only_first},
-        discriminator=lambda value: "by_name" if isinstance(value, dict) else "first",
+        schema = core_schema.list_schema(schema)
+    return core_schema.no_info_before_validator_function(
+        lambda value: value if isinstance(value, dict) else {first["name"]: value},
+        arguments,
+        json_schema_input_schema=core_schema.union_schema(
+            [arguments, schema, REFERENCE]
+        ),
     )
 
 
-def needs_arguments(method: Method) -> bool:
-    return any(
-        p.default is p.empty and p.kind is not p.VAR_POSITIONAL
-        for p in list(inspect.signature(method).parameters.values())[1:]
+# A method's arguments (but `self`) by name, which may be of types that aren't JSON (e.g. a machine).
+def arguments_schema(method: Callable[..., Any]) -> core_schema.ArgumentsV3Schema:
+    schema = generate_arguments_schema(
+        method,
+        parameters_callback=lambda index, *_: "skip" if index == 0 else None,
+        config=pydantic.ConfigDict(arbitrary_types_allowed=True),
     )
+    return cast(core_schema.ArgumentsV3Schema, schema)
 
 
-def bind(method: Method, arguments: Arguments) -> Step:
-    args, kwargs = arguments
-    return lambda obj: method(obj, *args, **kwargs)
+# Recipes' JSON schemas, where any argument can be a reference, and those of types that aren't JSON can only be one.
+class RecipeJsonSchema(GenerateJsonSchema):
+    @override
+    def arguments_v3_schema(
+        self, schema: core_schema.ArgumentsV3Schema
+    ) -> JsonSchemaValue:
+        result = super().arguments_v3_schema(schema)
+        reference = self.generate_inner(REFERENCE)
+        for name, value in result["properties"].items():
+            if reference not in [value, *value.get("anyOf", [])]:
+                result["properties"][name] = {"anyOf": [value, reference]}
+        return result
+
+    @override
+    def handle_invalid_for_json_schema(
+        self, schema: Any, error_info: str
+    ) -> JsonSchemaValue:
+        return self.generate_inner(REFERENCE)

@@ -36,6 +36,13 @@ class OutputStream(ABC):
                 return result
         raise TimeoutError(f"The stream didn't end within {timeout} seconds")
 
+    # What arrived and wasn't read yet (nothing once it ended).
+    def read_available(self) -> bytes:
+        try:
+            return self.read()
+        except EOFError:
+            return b""
+
     def file(self, timeout: float) -> BinaryIO:
         return io.BufferedReader(OutputStreamFile(self, timeout))
 
@@ -50,6 +57,18 @@ class OutputStream(ABC):
         raise TimeoutError(
             f"Wasn't quiet for {quiet_time} seconds within {timeout} seconds"
         )
+
+
+class InputStream(ABC):
+    @abstractmethod
+    def write(self, data: bytes) -> None: ...
+
+    @abstractmethod
+    def close(self) -> None: ...
+
+
+class InputOutputStream(OutputStream, InputStream):
+    pass
 
 
 class OutputStreamFile(io.RawIOBase):
@@ -102,18 +121,6 @@ class PexpectStream(OutputStream, SpawnBase):  # type: ignore
             return self.stream.read(size, timeout)
         except EOFError:
             raise pexpect.EOF("The stream ended") from None
-
-
-class InputStream(ABC):
-    @abstractmethod
-    def write(self, data: bytes) -> None: ...
-
-    @abstractmethod
-    def close(self) -> None: ...
-
-
-class InputOutputStream(OutputStream, InputStream):
-    pass
 
 
 class BasicInputOutputStream(InputOutputStream):

@@ -1,12 +1,14 @@
 <domain type="qemu">
   <name>test</name>
-  <os>
+  <os firmware="efi">
     <type arch="x86_64" machine="q35">hvm</type>
     <kernel>/fake/cwd/vmlinux</kernel>
     <initrd>/fake/cwd/initrd.gz</initrd>
     <cmdline>console=ttyS0 root=/dev/sda1</cmdline>
-    <loader readonly="yes" type="pflash">/fake/cwd/loader</loader>
-    <nvram format="qcow2">/fake/cwd/nvram</nvram>
+    <firmware>
+      <feature enabled="no" name="secure-boot" />
+      <feature enabled="no" name="enrolled-keys" />
+    </firmware>
   </os>
   <memory unit="B">4294967296</memory>
   <vcpu>2</vcpu>

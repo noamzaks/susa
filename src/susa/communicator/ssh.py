@@ -9,25 +9,29 @@ from typing import Literal
 from typing_extensions import override
 
 from susa.communicator.process import ProcessStream
-from susa.communicator.shell import Prelude, ShellCommunicator
+from susa.communicator.shell import NetworkCommunicator
+from susa.core.machine import Machine
 from susa.core.stream import InputOutputStream
 
-OPTIONS = ("StrictHostKeyChecking=no", "UserKnownHostsFile=/dev/null", "LogLevel=ERROR")
+OPTIONS = [
+    "-oStrictHostKeyChecking=no",
+    "-oUserKnownHostsFile=/dev/null",
+    "-oLogLevel=ERROR",
+]
 TRANSFER_TIMEOUT = 300
 
 
-class SSHCommunicator(ShellCommunicator):
+class SSHCommunicator(NetworkCommunicator):
     def __init__(
         self,
-        host: str,
+        machine: Machine | str,
         username: str,
         password: str | None = None,
         port: int = 22,
         file_transfer: Literal["sftp", "scp", "shell"] = "sftp",
-        prelude: Prelude | None = None,
     ) -> None:
-        super().__init__(prelude)
-        self.host = host
+        # The password comes from SSH_ASKPASS (see `create`).
+        super().__init__(machine)
         self.username = username
         self.password = password
         self.port = port
@@ -53,47 +57,15 @@ class SSHCommunicator(ShellCommunicator):
             self.askpass.unlink()
             self.askpass = None
 
-    def environment(self) -> dict[str, str]:
-        env = dict(os.environ)
-        if self.password is not None:
-            assert self.askpass is not None
-            env |= {
-                "SSH_ASKPASS": str(self.askpass),
-                "SSH_ASKPASS_REQUIRE": "force",
-                "SUSA_PASSWORD": self.password,
-            }
-        return env
-
-    def options(self) -> list[str]:
-        return [f"-o{option}" for option in OPTIONS]
-
     @override
     def open_stream(self) -> InputOutputStream:
         return ProcessStream(
             "ssh",
             "-tt",
             f"-p{self.port}",
-            *self.options(),
+            *OPTIONS,
             f"{self.username}@{self.host}",
             env=self.environment(),
-        )
-
-    def scp(self, source: str, destination: str) -> None:
-        subprocess.run(
-            [
-                "scp",
-                "-q",
-                "-s" if self.file_transfer == "sftp" else "-O",
-                f"-P{self.port}",
-                *self.options(),
-                source,
-                destination,
-            ],
-            env=self.environment(),
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            check=True,
-            timeout=TRANSFER_TIMEOUT,
         )
 
     @override
@@ -113,3 +85,32 @@ class SSHCommunicator(ShellCommunicator):
             local = Path(directory) / "file"
             self.scp(f"{self.username}@{self.host}:{remote}", str(local))
             return local.read_bytes()
+
+    def environment(self) -> dict[str, str]:
+        env = dict(os.environ)
+        if self.password is not None:
+            assert self.askpass is not None
+            env |= {
+                "SSH_ASKPASS": str(self.askpass),
+                "SSH_ASKPASS_REQUIRE": "force",
+                "SUSA_PASSWORD": self.password,
+            }
+        return env
+
+    def scp(self, source: str, destination: str) -> None:
+        subprocess.run(
+            [
+                "scp",
+                "-q",
+                "-s" if self.file_transfer == "sftp" else "-O",
+                f"-P{self.port}",
+                *OPTIONS,
+                source,
+                destination,
+            ],
+            env=self.environment(),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            check=True,
+            timeout=TRANSFER_TIMEOUT,
+        )

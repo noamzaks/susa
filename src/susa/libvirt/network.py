@@ -21,6 +21,10 @@ CAPTURE_DRAIN_TIME = 1
 class LVNetwork(LVEntity[lv.virNetwork, NetworkModel], Network, Sniffable):
     state_type = LVEntityState[NetworkModel]
 
+    # Spelled out for recipes, which would otherwise see `LVEntity`'s (generic) parameters.
+    def __init__(self, model: NetworkModel, conn: lv.virConnect | None = None) -> None:
+        super().__init__(model, conn)
+
     @property
     @override
     def name(self) -> str:
@@ -38,14 +42,14 @@ class LVNetwork(LVEntity[lv.virNetwork, NetworkModel], Network, Sniffable):
         self.value = self.conn.networkCreateXML(self.xml())
 
     @override
-    def lookup(self) -> lv.virNetwork:
-        return self.conn.networkLookupByName(self.name)
-
-    @override
     def destroy(self) -> None:
         assert self.value is not None
         self.value.destroy()
         self.value = None
+
+    @override
+    def lookup(self) -> lv.virNetwork:
+        return self.conn.networkLookupByName(self.name)
 
     @override
     def sniffer(self) -> LVSniffer:

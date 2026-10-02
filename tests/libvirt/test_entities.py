@@ -20,6 +20,7 @@ from susa.core.machine import (
 )
 from susa.core.network import Network
 from susa.libvirt.connection import Connection
+from susa.libvirt.disk_model import DiskModel
 from susa.libvirt.interface import LVInterface
 from susa.libvirt.interface_model import InterfaceModel
 from susa.libvirt.machine import (
@@ -29,6 +30,8 @@ from susa.libvirt.machine import (
 from susa.libvirt.machine_model import MachineModel
 from susa.libvirt.network import LVNetwork
 from susa.libvirt.network_model import NetworkModel
+from susa.libvirt.volume import LVVolume
+from susa.libvirt.volume_model import VolumeModel
 from susa.utilities.generic import GIGA
 
 MAC = "52:54:00:12:34:56"
@@ -80,7 +83,7 @@ def test_network_interfaces() -> None:
 
 def test_network_and_machine_interfaces_match() -> None:
     network = NetworkModel().default().ip("10.0.0.1")
-    interface = InterfaceModel(mac=MAC).default("x86_64")
+    interface = InterfaceModel(mac=MAC)
     network.interface(interface)
 
     with LVNetwork(network) as n, LVMachine(domain(interface)) as m:
@@ -106,8 +109,8 @@ def test_machine() -> None:
 
 def test_machine_interfaces() -> None:
     network = NetworkModel().default().ip("10.0.0.1")
-    reserved = InterfaceModel(mac=MAC).default("x86_64")
-    automatic = InterfaceModel(mac="52:54:00:00:00:01").default("x86_64")
+    reserved = InterfaceModel(mac=MAC)
+    automatic = InterfaceModel(mac="52:54:00:00:00:01")
     network.interface(reserved, "10.0.0.10").interface(automatic)
 
     with (
@@ -125,7 +128,7 @@ def test_machine_interfaces() -> None:
 def test_interface_without_reservation() -> None:
     # The interface is connected to the network, but the network has no DHCP to reserve an IP with.
     network = NetworkModel().default().ip("10.0.0.1", dhcp=False)
-    interface = InterfaceModel(mac=MAC).default("x86_64")
+    interface = InterfaceModel(mac=MAC)
     network.interface(interface)
 
     with LVNetwork(network), LVMachine(domain(interface)) as machine:
@@ -136,7 +139,7 @@ def test_interface_without_reservation() -> None:
 
 def test_machine_interfaces_found_at_runtime() -> None:
     network = NetworkModel().default().ip("10.0.0.1")
-    interface = InterfaceModel(mac=MAC).default("x86_64")
+    interface = InterfaceModel(mac=MAC)
     network.interface(interface, "10.0.0.10")
 
     with LVNetwork(network), LVMachine(domain(interface)) as machine:
@@ -233,6 +236,36 @@ def test_machine_press() -> None:
         assert isinstance(machine, KeyPressable)
         machine.press([Key.LEFT_CTRL, Key.LEFT_ALT, Key.DELETE])
         machine.type_text("root\n")
+
+
+def test_volume() -> None:
+    model = VolumeModel().capacity(GIGA)
+    with LVVolume(model, "default-pool") as volume:
+        assert volume.value is not None
+        assert volume.value.name() == model.get_name()
+        adapter = pydantic.TypeAdapter(LVVolume)
+        restored = adapter.validate_json(adapter.dump_json(volume))
+        assert (restored.pool, restored.model) == ("default-pool", model)
+        assert restored.value is not None
+    pool = Connection.current_conn().storagePoolLookupByName("default-pool")
+    assert model.get_name() not in pool.listVolumes()
+
+
+def test_volume_commit() -> None:
+    with LVVolume(VolumeModel().capacity(GIGA), "default-pool") as volume:
+        # The mock driver needs a capacity (others take the source's).
+        committed = volume.commit(VolumeModel().capacity(GIGA))
+        assert committed.value is None
+        with committed:
+            assert committed.pool == "default-pool"
+            assert committed.path != volume.path
+
+
+def test_machine_volume() -> None:
+    volume = VolumeModel().capacity(GIGA)
+    model = domain().disk(DiskModel().volume(volume, "default-pool"))
+    with LVVolume(volume, "default-pool"), LVMachine(model) as machine:
+        assert machine.is_powered_on
 
 
 def test_network_json() -> None:

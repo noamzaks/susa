@@ -43,3 +43,9 @@ def test_type_text_unsupported() -> None:
         keyboard.type_text("abcé")
     # Nothing was typed.
     assert keyboard.presses == []
+
+
+def test_type_text_control() -> None:
+    keyboard = FakeKeyboard()
+    keyboard.type_text("\x03\t")
+    assert keyboard.presses == [[Key.LEFT_CTRL, Key.C], [Key.TAB]]

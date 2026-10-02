@@ -7,6 +7,7 @@ import pydantic_libvirt.domain as lvdomain
 from typing_extensions import Self
 
 from susa.libvirt.model import Model
+from susa.libvirt.volume_model import VolumeModel
 
 
 class DiskModel(Model[lvdomain.disk]):
@@ -26,6 +27,21 @@ class DiskModel(Model[lvdomain.disk]):
         )
         self.xml_model.source = lvdomain.devices_disk_source(
             file=str(Path(path).resolve())
+        )
+
+        return self
+
+    def bus(self, bus: str) -> Self:
+        self.xml_model.target.bus = cast(Any, bus)
+
+        return self
+
+    # A volume (in a storage pool), e.g. an overlay of a base image.
+    def volume(self, volume: VolumeModel, pool: str = "default") -> Self:
+        self.xml_model.type = "volume"
+        self.xml_model.driver = lvdomain.disk_driver(name="qemu", type="qcow2")
+        self.xml_model.source = lvdomain.devices_disk_source(
+            pool=pool, volume=volume.get_name()
         )
 
         return self

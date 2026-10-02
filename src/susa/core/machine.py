@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING
 
 from susa.core.interface import Interface
 from susa.core.resource import Resource
-from susa.core.stream import InputOutputStream
+from susa.core.stream import InputOutputStream, SavedOutputStream
+from susa.utilities.networking import wait_until_ping
 
 if TYPE_CHECKING:
     from PIL.ImageFile import ImageFile
@@ -97,3 +98,20 @@ class Serial(Resource, InputOutputStream): ...
 class SerialAccessible(ABC):
     @abstractmethod
     def serial(self) -> Serial: ...
+
+
+# Booting is over once it answers ping and its serial console is quiet for `quiet_time`. If it isn't by `timeout`, the
+# error has what its console said meanwhile.
+def wait_until_booted(
+    machine: Machine, timeout: float = 120, quiet_time: float = 5
+) -> None:
+    assert isinstance(machine, SerialAccessible)
+    with machine.serial() as serial:
+        console = SavedOutputStream(serial)
+        try:
+            wait_until_ping(machine.ip, timeout)
+            console.wait_until_quiet(quiet_time, timeout)
+        except TimeoutError as e:
+            console.read()
+            output = console.data.decode(errors="backslashreplace")
+            raise TimeoutError(f"{machine.name} didn't boot: {e}\n{output}") from e

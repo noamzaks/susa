@@ -2,17 +2,19 @@ from __future__ import annotations
 
 from typing_extensions import override
 
-from susa.communicator.shell import Prelude, ShellCommunicator
-from susa.core.machine import Serial
+from susa.communicator.shell import Login, ShellCommunicator
+from susa.core.machine import SerialAccessible
 from susa.core.stream import InputOutputStream
 
 
+# A shell on a machine's serial console.
 class SerialCommunicator(ShellCommunicator):
-    def __init__(self, serial: Serial, prelude: Prelude | None = None) -> None:
-        super().__init__(prelude)
-        self.serial = serial
+    def __init__(self, machine: SerialAccessible, login: Login | None = None) -> None:
+        super().__init__(login)
+        self.machine = machine
 
     @override
     def open_stream(self) -> InputOutputStream:
-        self.serial.create()
-        return self.serial
+        serial = self.machine.serial()
+        serial.create()
+        return serial

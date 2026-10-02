@@ -3,7 +3,6 @@ from __future__ import annotations
 import pydantic_libvirt.domain as lvdomain
 from typing_extensions import Self
 
-from susa.libvirt.arch import ARCH_DEFAULTS
 from susa.libvirt.model import Model
 from susa.utilities.networking import random_mac
 
@@ -33,15 +32,10 @@ class InterfaceModel(Model[lvdomain.devices_interface]):
 
         return self
 
-    def default_model(self, arch: str) -> Self:
-        self.xml_model.model = lvdomain.interface_options_model(
-            type=ARCH_DEFAULTS[arch].nic
-        )
+    def model(self, type: str) -> Self:
+        self.xml_model.model = lvdomain.interface_options_model(type=type)
 
         return self
-
-    def default(self, arch: str) -> Self:
-        return self.default_model(arch=arch)
 
     def get_mac(self) -> str:
         assert self.xml_model.mac is not None

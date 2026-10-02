@@ -5,62 +5,69 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+# What works on each architecture (by libvirt's name for it), as `MachineModel` builder arguments.
 @dataclass(frozen=True)
 class ArchDefaults:
+    # What `MachineModel.default()` sets up.
     machine: str
-    pcie: bool = True
     acpi: bool = True
     apic: bool = False
-    console_target: str = "serial"
-    disk_bus: str | None = None
-    video: str = "virtio"
-    # If set, the only PCI slots that get an interrupt (libvirt would pick others).
-    pci_slots: tuple[int, ...] | None = None
     gic: bool = False
-    usb_model: str | None = None
-    # The CPU mode to use when emulating (host's own architecture isn't available).
+    # The CPU when emulating (KVM passes the host's through).
     tcg_cpu: str | None = None
+    video: str = "virtio"
+    pcie: bool = True
+    # The USB controller's model (libvirt's default if `None`).
+    usb: str | None = None
+    console: str = "serial"
     # Extra QEMU arguments libvirt has no XML for.
     qemu_args: tuple[str, ...] = ()
+
+    # How `MachineModel.disk()` and `interface()` attach devices (unless they're told otherwise).
+    disk_bus: str | None = None
     nic: str = "e1000"
+    # If set, the only PCI slots that get an interrupt (libvirt would pick others).
+    pci_slots: tuple[int, ...] | None = None
 
 
 ARCH_DEFAULTS: dict[str, ArchDefaults] = {
     "x86_64": ArchDefaults("q35", apic=True, disk_bus="sata"),
     "aarch64": ArchDefaults(
         "virt",
-        disk_bus="virtio",
         gic=True,
-        usb_model="qemu-xhci",
         tcg_cpu="maximum",
+        usb="qemu-xhci",
+        disk_bus="virtio",
         nic="virtio",
     ),
     "mips": ArchDefaults(
         "malta",
-        pcie=False,
         acpi=False,
-        disk_bus="ide",
+        # Malta's kernels only have a framebuffer driver for Cirrus.
         video="cirrus",
+        pcie=False,
+        disk_bus="ide",
+        # Malta only routes interrupts to PCI slots 11 and 12.
         pci_slots=(11, 12),
     ),
     "ppc64le": ArchDefaults(
-        "pseries", pcie=False, acpi=False, disk_bus="virtio", video="vga"
+        "pseries", acpi=False, video="vga", pcie=False, disk_bus="virtio"
     ),
     "armv7l": ArchDefaults(
         "virt",
         acpi=False,
-        disk_bus="virtio",
-        usb_model="qemu-xhci",
+        usb="qemu-xhci",
+        # A 32-bit guest can't reach the PCI window above 4 GB.
         qemu_args=("-machine", "virt,highmem=off"),
+        disk_bus="virtio",
     ),
-    "riscv64": ArchDefaults(
-        "virt", disk_bus="virtio", usb_model="qemu-xhci", nic="virtio"
-    ),
+    "riscv64": ArchDefaults("virt", usb="qemu-xhci", disk_bus="virtio", nic="virtio"),
     "i686": ArchDefaults(
         "q35",
         apic=True,
-        disk_bus="sata",
+        # An i486-class CPU, since a true i386 crashes any kernel newer than ~2013.
         qemu_args=("-cpu", "qemu32,family=4"),
+        disk_bus="sata",
     ),
 }
 

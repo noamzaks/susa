@@ -3,21 +3,20 @@ from __future__ import annotations
 from typing_extensions import override
 
 from susa.communicator.process import ProcessStream
-from susa.communicator.shell import Prelude, ShellCommunicator, login
+from susa.communicator.shell import Login, NetworkCommunicator
+from susa.core.machine import Machine
 from susa.core.stream import InputOutputStream
 
 
-class TelnetCommunicator(ShellCommunicator):
+class TelnetCommunicator(NetworkCommunicator):
     def __init__(
         self,
-        host: str,
+        machine: Machine | str,
         username: str,
         password: str,
         port: int = 23,
-        prelude: Prelude | None = None,
     ) -> None:
-        super().__init__(prelude or login(password, username))
-        self.host = host
+        super().__init__(machine, Login(password, username))
         self.port = port
 
     @override

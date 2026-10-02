@@ -31,6 +31,11 @@ class Model(Serializable, Generic[T]):
     def parse(cls, xml: str | bytes) -> Self:
         return cls(xml_model=cast(T, cls.xml_model_type.from_xml(xml)))
 
+    # Models are values.
+    @override
+    def __eq__(self, other: object) -> bool:
+        return type(other) is type(self) and other.build() == self.build()
+
     # A recipe (see `recipe_schema`) or XML.
     @classmethod
     @override

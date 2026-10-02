@@ -59,9 +59,11 @@ class LVEntity(Serializable, Generic[T, M]):
 
     @classmethod
     def restore(cls, state: LVEntityState[M]) -> Self:
-        return cls(state["model"]).reconnect(state["uri"])
+        entity = cls(state["model"])
+        entity.reconnect(state["uri"])
+        return entity
 
-    def reconnect(self, uri: str) -> Self:
+    def reconnect(self, uri: str) -> None:
         # Sanity.
         assert self.conn.getURI() == uri
         try:
@@ -69,4 +71,3 @@ class LVEntity(Serializable, Generic[T, M]):
         except lv.libvirtError as e:
             if e.get_error_code() not in NOT_FOUND:
                 raise
-        return self

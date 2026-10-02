@@ -146,7 +146,13 @@ SHIFTED: dict[str, str] = {
     **dict(zip(")!@#$%^&*(", string.digits)),
     **dict(zip('_+{}|:"~<>?', "-=[]\\;'`,./")),
 }
+# Control characters (e.g. Ctrl-C), typed with ctrl and their letter.
+CONTROL: dict[str, str] = {
+    chr(ord(c) - ord("a") + 1): c for c in string.ascii_lowercase
+}
 KEYS: dict[str, list[Key]] = {
+    **{c: [Key.LEFT_CTRL, UNSHIFTED[u]] for c, u in CONTROL.items()},
+    # Some control characters have their own keys (e.g. tab).
     **{c: [key] for c, key in UNSHIFTED.items()},
     **{c: [Key.LEFT_SHIFT, UNSHIFTED[u]] for c, u in SHIFTED.items()},
 }

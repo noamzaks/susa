@@ -340,5 +340,5 @@ $RECYCLE.BIN/
 
 # End of https://www.toptal.com/developers/gitignore/api/c,c++,cmake,linux,macos,python,windows
 
-# Generated before building a release (`python -m susa.schemas`).
-src/susa/schemas/*.schema.json
+# Generated before building a release (`python -m susa.recipes`).
+src/susa/recipes/recipe.schema.json

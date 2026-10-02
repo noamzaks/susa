@@ -5,6 +5,7 @@ import shlex
 import time
 from abc import abstractmethod
 from collections.abc import Callable
+from dataclasses import dataclass
 from subprocess import CompletedProcess
 from typing import TypeAlias
 
@@ -13,6 +14,7 @@ from typing_extensions import override
 
 from susa.communicator.posix import PosixFileTransfer, printf_lines
 from susa.core.communicator import AsyncCommand, AsyncCommandRunner
+from susa.core.machine import Machine
 from susa.core.stream import InputOutputStream, InputStream, OutputStream, PexpectStream
 
 EXIT = re.compile(rb"SUSA-EXIT-(\d+)\n")
@@ -31,16 +33,20 @@ INTERRUPT = b"\x03"
 Prelude: TypeAlias = Callable[[InputOutputStream], None]
 
 
-def login(password: str, username: str | None = None, quiet_time: float = 3) -> Prelude:
-    lines = ([username.encode()] if username is not None else []) + [password.encode()]
+# A prelude that logs in: the username (if any), then the password, each once the terminal is quiet (since input sent
+# before a login program prompts is usually discarded).
+@dataclass(frozen=True)
+class Login:
+    password: str
+    username: str | None = None
+    quiet_time: float = 3
 
-    def prelude(stream: InputOutputStream) -> None:
-        for line in lines:
-            # Input sent before the login program prompts is usually discarded.
-            stream.wait_until_quiet(quiet_time, SETUP_TIMEOUT)
-            stream.write(line + ENTER)
-
-    return prelude
+    def __call__(self, stream: InputOutputStream) -> None:
+        for line in [self.username, self.password]:
+            if line is None:
+                continue
+            stream.wait_until_quiet(self.quiet_time, SETUP_TIMEOUT)
+            stream.write(line.encode() + ENTER)
 
 
 class ShellInputStream(InputStream):
@@ -202,12 +208,24 @@ class ShellCommunicator(PosixFileTransfer, AsyncCommandRunner):
         assert before is not None and isinstance(match, re.Match)
         return CompletedProcess(command, int(match.group(1)), before)
 
+    @override
+    def start(self, command: str) -> ShellCommand:
+        return ShellCommand(self, command)
+
     def background(self, command: str) -> str:
         started = self.execute(f"{command} & echo $!")
         started.check_returncode()
         # Interactive shells may also print the job number (e.g. "[1] 1234").
         return started.stdout.split()[-1].decode()
 
-    @override
-    def start(self, command: str) -> ShellCommand:
-        return ShellCommand(self, command)
+
+# A shell reached over the network: on a machine (at its IP, once it has one), or at an address (e.g. of a host SUSA
+# doesn't manage).
+class NetworkCommunicator(ShellCommunicator):
+    def __init__(self, machine: Machine | str, prelude: Prelude | None = None) -> None:
+        super().__init__(prelude)
+        self.machine = machine
+
+    @property
+    def host(self) -> str:
+        return self.machine if isinstance(self.machine, str) else self.machine.ip
