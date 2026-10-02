@@ -199,7 +199,7 @@ def test_machine_serial_needs_created_machine() -> None:
     machine = LVMachine(domain())
     assert isinstance(machine, SerialAccessible)
     with pytest.raises(AssertionError):
-        machine.serial()
+        machine.serial().create()
 
 
 def test_snapshot() -> None:
@@ -208,12 +208,24 @@ def test_snapshot() -> None:
         assert isinstance(snapshot, Snapshot)
         assert isinstance(snapshot, LVSnapshot)
         assert snapshot.machine is machine
+        assert snapshot.value is None
+        snapshot.create()
         assert snapshot.value is not None
         assert machine.value is not None
 
-        # Destroying reverts, and forgets the snapshot.
+        # Destroying reverts, and deletes the snapshot.
         snapshot.destroy()
         assert snapshot.value is None
+        assert machine.domain.snapshotListNames() == []
+
+
+def test_snapshot_context() -> None:
+    with LVMachine(domain()) as machine:
+        with machine.snapshot() as snapshot:
+            machine.power_off()
+        # Leaving it reverts.
+        assert snapshot.value is None
+        assert machine.is_powered_on
 
 
 def test_machine_press() -> None:
@@ -252,10 +264,10 @@ def test_machine_json() -> None:
     assert machine.name not in [d.name() for d in domains]
 
 
-def test_machine_from_builder_calls() -> None:
+def test_machine_from_recipe() -> None:
     uri = Connection.current_conn().getURI()
-    calls = [{"name": "test"}, {"arch": "x86_64"}, "default"]
-    state = {"uri": uri, "model": calls}
+    recipe = [{"name": "test"}, {"arch": "x86_64"}, "default"]
+    state = {"uri": uri, "model": recipe}
     machine = pydantic.TypeAdapter(LVMachine).validate_python(state)
     assert (
         machine.model.build() == MachineModel("test").arch("x86_64").default().build()
@@ -266,6 +278,7 @@ def test_snapshot_json() -> None:
     adapter = pydantic.TypeAdapter(LVSnapshot)
     with LVMachine(domain()) as machine:
         snapshot = machine.snapshot()
+        snapshot.create()
         restored = adapter.validate_json(adapter.dump_json(snapshot))
         assert restored.model.build() == snapshot.model.build()
         assert restored.machine.name == machine.name
@@ -277,9 +290,17 @@ def test_snapshot_json() -> None:
 def test_pickle() -> None:
     with LVMachine(domain()) as machine:
         snapshot = machine.snapshot()
+        snapshot.create()
         restored_machine = pickle.loads(pickle.dumps(machine))
         assert isinstance(restored_machine, LVMachine)
         assert restored_machine.is_powered_on
         restored_snapshot = pickle.loads(pickle.dumps(snapshot))
         assert isinstance(restored_snapshot, LVSnapshot)
         assert restored_snapshot.machine.name == machine.name
+
+
+def test_nested_connection() -> None:
+    outer = Connection.current_conn()
+    with Connection("test:///default") as inner:
+        assert Connection.current_conn() is inner
+    assert Connection.current_conn() is outer

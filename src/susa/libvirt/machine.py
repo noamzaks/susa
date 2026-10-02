@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from typing import cast
 
 import libvirt as lv
-from typing_extensions import override
+from typing_extensions import Self, override
 
 from susa.core.interface import Interface
 from susa.core.keyboard import Key, KeyPressable
@@ -48,15 +48,14 @@ class LVSnapshot(LVEntity[lv.virDomainSnapshot, SnapshotModel], Snapshot):
 
     @override
     def create(self) -> None:
-        if self.value is None:
-            assert self.machine.value is not None
-            self.value = self.machine.value.snapshotCreateXML(self.build())
+        assert self.value is None
+        self.value = self.machine.domain.snapshotCreateXML(self.xml())
 
     @override
     def destroy(self) -> None:
         assert self.value is not None
         self.revert()
-
+        self.value.delete()
         self.value = None
 
     @override
@@ -64,18 +63,19 @@ class LVSnapshot(LVEntity[lv.virDomainSnapshot, SnapshotModel], Snapshot):
         return self.machine.domain.snapshotLookupByName(self.model.get_name())
 
     @override
-    def __getstate__(self) -> LVSnapshotState:
-        return {**super().__getstate__(), "machine": self.machine}
+    def serialize(self) -> LVSnapshotState:
+        return {**super().serialize(), "machine": self.machine}
 
+    @classmethod
     @override
-    def __setstate__(self, state: LVEntityState[SnapshotModel]) -> None:
-        self.machine = cast(LVSnapshotState, state)["machine"]
-        super().__setstate__(state)
+    def restore(cls, state: LVEntityState[SnapshotModel]) -> Self:
+        snapshot = cast(LVSnapshotState, state)
+        return cls(snapshot["machine"], snapshot["model"]).reconnect(snapshot["uri"])
 
     @override
     def revert(self) -> None:
-        assert self.value is not None and self.machine.value is not None
-        self.machine.value.revertToSnapshot(self.value)
+        assert self.value is not None
+        self.machine.domain.revertToSnapshot(self.value)
 
 
 class LVMachine(
@@ -102,7 +102,7 @@ class LVMachine(
     @override
     def create(self) -> None:
         assert self.value is None
-        self.value = self.conn.defineXML(self.build())
+        self.value = self.conn.defineXML(self.xml())
         self.value.create()
 
     @override
@@ -140,9 +140,7 @@ class LVMachine(
 
     @override
     def snapshot(self) -> LVSnapshot:
-        result = LVSnapshot(machine=self)
-        result.create()
-        return result
+        return LVSnapshot(machine=self)
 
     @property
     @override
@@ -179,9 +177,7 @@ class LVMachine(
 
     @override
     def serial(self) -> LVSerial:
-        result = LVSerial(domain=self.domain, conn=self.conn)
-        result.create()
-        return result
+        return LVSerial(self)
 
     @override
     def press(self, keys: Sequence[Key], hold_time: float = 0.1) -> None:

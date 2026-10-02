@@ -157,9 +157,9 @@ class KeyPressable(ABC):
     def press(self, keys: Sequence[Key], hold_time: float = 0.1) -> None: ...
 
     def type_text(self, text: str, hold_time: float = 0.05) -> None:
+        if untypeable := sorted(set(text) - KEYS.keys()):
+            raise ValueError(f"Can't type {untypeable}")
         for c in text:
-            if c not in KEYS:
-                raise ValueError(f"Can't type {c!r}")
             self.press(KEYS[c], hold_time)
 
 

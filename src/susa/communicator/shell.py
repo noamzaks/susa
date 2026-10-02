@@ -11,7 +11,8 @@ from typing import TypeAlias
 import pexpect
 from typing_extensions import override
 
-from susa.core.communicator import AsyncCommand, AsyncCommandRunner, printf_lines
+from susa.communicator.posix import PosixFileTransfer, printf_lines
+from susa.core.communicator import AsyncCommand, AsyncCommandRunner
 from susa.core.stream import InputOutputStream, InputStream, OutputStream, PexpectStream
 
 EXIT = re.compile(rb"SUSA-EXIT-(\d+)\n")
@@ -57,9 +58,10 @@ class ShellInputStream(InputStream):
 
     @override
     def close(self) -> None:
-        if self.holder is not None:
-            self.shell.execute(f"kill {self.holder}; wait {self.holder}")
-            self.holder = None
+        if self.holder is None:
+            return
+        self.shell.execute(f"kill {self.holder}; wait {self.holder}")
+        self.holder = None
 
 
 class ShellOutputStream(OutputStream):
@@ -127,9 +129,10 @@ class ShellCommand(AsyncCommand):
     @override
     def wait(self, timeout: float = 60) -> int:
         # The shell only reports the exit code once.
-        if self.exit_code is None:
-            self.exit_code = self.shell.execute(f"wait {self.pid}", timeout).returncode
-            self._stdin.close()
+        if self.exit_code is not None:
+            return self.exit_code
+        self.exit_code = self.shell.execute(f"wait {self.pid}", timeout).returncode
+        self._stdin.close()
         return self.exit_code
 
     @override
@@ -137,7 +140,7 @@ class ShellCommand(AsyncCommand):
         self.shell.execute(f"kill {self.pid}")
 
 
-class ShellCommunicator(AsyncCommandRunner):
+class ShellCommunicator(PosixFileTransfer, AsyncCommandRunner):
     def __init__(self, prelude: Prelude | None = None, quiet_time: float = 3) -> None:
         self.prelude = prelude
         # Long enough for whatever runs at login (which may silently wait for input) to be done.

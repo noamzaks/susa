@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import pickle
 import platform
 import re
 from pathlib import Path
@@ -152,6 +153,14 @@ def test_interface_model_parse_keeps_mac() -> None:
 
 
 @pytest.mark.parametrize("arch", ARCHITECTURES)
+def test_machine_model_interface_default_nic(arch: str) -> None:
+    machine = MachineModel("test").arch(arch).interface(InterfaceModel(mac=MAC))
+    [interface] = machine.get_interfaces()
+    assert interface.xml_model.model is not None
+    assert interface.xml_model.model.type == ARCH_DEFAULTS[arch].nic
+
+
+@pytest.mark.parametrize("arch", ARCHITECTURES)
 def test_interface_model_default_nic(arch: str) -> None:
     interface = InterfaceModel(mac=MAC).default(arch)
     assert interface.xml_model.model is not None
@@ -290,7 +299,7 @@ def test_interface_model_network() -> None:
     assert interface.get_network() == "test"
 
 
-def test_machine_model_from_json() -> None:
+def test_machine_model_from_recipe() -> None:
     machine = pydantic.TypeAdapter(MachineModel).validate_python(
         [
             {"name": "test"},
@@ -320,7 +329,7 @@ def test_machine_model_from_json() -> None:
     assert machine.build() == expected.build()
 
 
-def test_network_model_from_json() -> None:
+def test_network_model_from_recipe() -> None:
     network = pydantic.TypeAdapter(NetworkModel).validate_python(
         [
             {"name": "test"},
@@ -341,7 +350,7 @@ def test_network_model_from_json() -> None:
 
 
 @pytest.mark.parametrize(
-    "calls",
+    "recipe",
     (
         ["unknown"],
         [{"arch": "x86_64", "cpu": 2}],
@@ -351,15 +360,22 @@ def test_network_model_from_json() -> None:
         ["arch"],
     ),
 )
-def test_machine_model_from_invalid_json(calls: list[Any]) -> None:
+def test_machine_model_from_invalid_recipe(recipe: list[Any]) -> None:
     with pytest.raises(pydantic.ValidationError):
-        pydantic.TypeAdapter(MachineModel).validate_python(calls)
+        pydantic.TypeAdapter(MachineModel).validate_python(recipe)
 
 
 def test_model_json_schema() -> None:
     schema = json.dumps(pydantic.TypeAdapter(MachineModel).json_schema())
     for method in ("arch", "default", "efi", "disk", "qemu_args", "source", "mac"):
         assert f'"{method}"' in schema
+
+
+def test_model_pickle() -> None:
+    machine = MachineModel("test").arch("x86_64").default().qemu_args("-cpu", "max")
+    restored = pickle.loads(pickle.dumps(machine))
+    assert isinstance(restored, MachineModel)
+    assert restored.build() == machine.build()
 
 
 def test_model_json() -> None:

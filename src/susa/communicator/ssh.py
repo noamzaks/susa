@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal
 
@@ -11,7 +10,6 @@ from typing_extensions import override
 
 from susa.communicator.process import ProcessStream
 from susa.communicator.shell import Prelude, ShellCommunicator
-from susa.core.communicator import FileTransferrer
 from susa.core.stream import InputOutputStream
 
 OPTIONS = ("StrictHostKeyChecking=no", "UserKnownHostsFile=/dev/null", "LogLevel=ERROR")
@@ -99,29 +97,19 @@ class SSHCommunicator(ShellCommunicator):
         )
 
     @override
-    def upload_single(self, local: Path, remote: str) -> None:
+    def write_file(self, data: bytes, remote: str) -> None:
         if self.file_transfer == "shell":
-            super().upload_single(local, remote)
-        else:
-            self.scp(str(local), f"{self.username}@{self.host}:{remote}")
+            return super().write_file(data, remote)
+        with tempfile.NamedTemporaryFile() as local:
+            local.write(data)
+            local.flush()
+            self.scp(local.name, f"{self.username}@{self.host}:{remote}")
 
     @override
-    def download_single(self, remote: str, local: Path) -> None:
+    def read_file(self, remote: str) -> bytes:
         if self.file_transfer == "shell":
-            super().download_single(remote, local)
-        else:
+            return super().read_file(remote)
+        with tempfile.TemporaryDirectory() as directory:
+            local = Path(directory) / "file"
             self.scp(f"{self.username}@{self.host}:{remote}", str(local))
-
-    @override
-    def upload(self, files: Mapping[Path, str]) -> None:
-        if self.file_transfer == "shell":
-            super().upload(files)
-        else:
-            FileTransferrer.upload(self, files)
-
-    @override
-    def download(self, files: Mapping[str, Path]) -> None:
-        if self.file_transfer == "shell":
-            super().download(files)
-        else:
-            FileTransferrer.download(self, files)
+            return local.read_bytes()

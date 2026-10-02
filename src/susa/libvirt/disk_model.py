@@ -20,12 +20,12 @@ class DiskModel(Model[lvdomain.disk]):
             target=lvdomain.disk_target(dev="sda"),
         )
 
-    def source(self, p: str | Path, format: str = "qcow2") -> Self:
+    def source(self, path: str | Path, format: str = "qcow2") -> Self:
         self.xml_model.driver = lvdomain.disk_driver(
             name="qemu", type=cast(Any, format)
         )
         self.xml_model.source = lvdomain.devices_disk_source(
-            file=str(Path(p).resolve())
+            file=str(Path(path).resolve())
         )
 
         return self

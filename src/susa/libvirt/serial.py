@@ -1,25 +1,27 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import libvirt as lv
 from typing_extensions import override
 
 from susa.core.machine import Serial
 from susa.libvirt.stream import LVStream
 
+if TYPE_CHECKING:
+    from susa.libvirt.machine import LVMachine
+
 
 class LVSerial(Serial):
-    def __init__(self, domain: lv.virDomain, conn: lv.virConnect) -> None:
-        self.domain = domain
-        self.conn = conn
+    def __init__(self, machine: LVMachine) -> None:
+        self.machine = machine
         self.stream: LVStream | None = None
 
     @override
     def create(self) -> None:
-        if self.stream is not None:
-            return
-
-        stream = LVStream(self.conn)
-        self.domain.openConsole(
+        assert self.stream is None
+        stream = LVStream(self.machine.conn)
+        self.machine.domain.openConsole(
             None,  # type: ignore
             stream.stream,
             lv.VIR_DOMAIN_CONSOLE_FORCE,

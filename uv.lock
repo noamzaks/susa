@@ -676,7 +676,7 @@ wheels = [
 [[package]]
 name = "pydantic-libvirt"
 version = "0.1.0"
-source = { git = "https://github.com/noamzaks/pydantic-libvirt#0bf564a6c77ef671587a5764f72d15fc04fb4838" }
+source = { git = "https://github.com/noamzaks/pydantic-libvirt#27298b7059713a3d8d2aa063c04f0555f26c1739" }
 dependencies = [
     { name = "pydantic" },
     { name = "pydantic-xml" },

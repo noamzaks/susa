@@ -35,7 +35,7 @@ class LVNetwork(LVEntity[lv.virNetwork, NetworkModel], Network, Sniffable):
     @override
     def create(self) -> None:
         assert self.value is None
-        self.value = self.conn.networkCreateXML(self.build())
+        self.value = self.conn.networkCreateXML(self.xml())
 
     @override
     def lookup(self) -> lv.virNetwork:
@@ -64,8 +64,8 @@ class LVSniffer(Sniffer):
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
         )
-        # Reading the pcap header waits for it, and it's only written once capturing started.
-        assert self.pcap is not None
+        # tcpdump writes the pcap header once capturing started, and opening the reader waits for it.
+        _ = self.pcap
 
     @override
     def destroy(self) -> None:

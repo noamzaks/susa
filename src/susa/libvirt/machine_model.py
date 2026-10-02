@@ -1,21 +1,20 @@
 from __future__ import annotations
 
-import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, cast
 
 import pydantic_libvirt.domain as lvdomain
 import pydantic_libvirt.domainsnapshot as lvdomainsnapshot
-from typing_extensions import Self, override
+from typing_extensions import Self
 
-from susa.libvirt.arch import ARCH_DEFAULTS
+from susa.libvirt.arch import ARCH_DEFAULTS, ArchDefaults, have_kvm
 from susa.libvirt.disk_model import DiskModel
 from susa.libvirt.interface_model import InterfaceModel
 from susa.libvirt.model import Model
-from susa.utilities.generic import have_kvm, random_id
+from susa.utilities.generic import random_id
 
-# TODO: I have updated pydantic-libvirt so this should no longer be required. Please remove this hack.
-QEMU_NAMESPACE = "http://libvirt.org/schemas/domain/qemu/1.0"
+# The device names libvirt gives disks on each bus ("sd" for any other).
+BUS_PREFIXES = {"ide": "hd", "fdc": "fd", "virtio": "vd", "xen": "xvd", "uml": "ubd"}
 
 
 class MachineModel(Model[lvdomain.domain]):
@@ -38,36 +37,6 @@ class MachineModel(Model[lvdomain.domain]):
             ),
         )
 
-    @classmethod
-    @override
-    def parse(cls, xml: str | bytes) -> Self:
-        # The inverse of `tree`.
-        tree = ET.fromstring(xml)
-        if (commandline := tree.find(f"{{{QEMU_NAMESPACE}}}commandline")) is not None:
-            commandline.tag = "commandline"
-            for arg in commandline:
-                arg.tag = arg.tag.removeprefix(f"{{{QEMU_NAMESPACE}}}")
-        # `pydantic_libvirt` reads PCI address numbers as hexadecimal but writes them in decimal (libvirt reads
-        # both, by their `0x` prefix).
-        for address in tree.iter("address"):
-            for key in ("domain", "bus", "slot", "function"):
-                if (value := address.get(key)) is not None and value.isdigit():
-                    address.set(key, hex(int(value)))
-        return super().parse(ET.tostring(tree))
-
-    @override
-    def tree(self) -> ET.Element:
-        tree = super().tree()
-
-        # `pydantic_libvirt` doesn't know about the QEMU namespace.
-        if (commandline := tree.find("commandline")) is not None:
-            tree.attrib = {"xmlns:qemu": QEMU_NAMESPACE, **tree.attrib}
-            commandline.tag = "qemu:commandline"
-            for arg in commandline:
-                arg.tag = f"qemu:{arg.tag}"
-
-        return tree
-
     def name(self, name: str) -> Self:
         self.xml_model.name = lvdomain.name(value=name)
 
@@ -82,24 +51,6 @@ class MachineModel(Model[lvdomain.domain]):
         )
 
         return self
-
-    def get_arch(self) -> str:
-        assert (
-            self.xml_model.os is not None and self.xml_model.os.type.arch is not None
-        ), "Set the architecture with `arch` first!"
-
-        return self.xml_model.os.type.arch
-
-    def get_name(self) -> str:
-        return self.xml_model.name.value
-
-    def get_interfaces(self) -> list[InterfaceModel]:
-        assert self.xml_model.devices is not None
-
-        return [
-            InterfaceModel(xml_model=i)
-            for i in self.xml_model.devices.interface_list or []
-        ]
 
     def memory(self, memory: int) -> Self:
         self.xml_model.memory = lvdomain.resources_memory(value=memory, unit="B")
@@ -123,13 +74,6 @@ class MachineModel(Model[lvdomain.domain]):
 
         return self
 
-    def get_nvram(self) -> str | None:
-        """The path of the machine's UEFI variables, if it has any."""
-        if self.xml_model.os is None or self.xml_model.os.nvram is None:
-            return None
-
-        return self.xml_model.os.nvram.value
-
     def kernel(
         self,
         kernel: str | Path,
@@ -151,199 +95,152 @@ class MachineModel(Model[lvdomain.domain]):
         return self
 
     def disk(self, disk: DiskModel) -> Self:
-        assert (
-            self.xml_model.devices is not None
-            and self.xml_model.devices.disk_list is not None
-        )
-        arch = self.get_arch()
+        disks = self.get_devices().disk_list
+        assert disks is not None
 
-        bus_prefixes: dict[str, str] = {
-            "ide": "hd",
-            "fdc": "fd",
-            "virtio": "vd",
-            "xen": "xvd",
-            "uml": "ubd",
-        }
-
-        bus = disk.xml_model.target.bus or ARCH_DEFAULTS[arch].disk_bus
-
-        prefix = bus_prefixes.get(bus, "sd") if bus is not None else "sd"
-
+        bus = disk.xml_model.target.bus or self.get_defaults().disk_bus
+        prefix = BUS_PREFIXES.get(bus, "sd") if bus is not None else "sd"
+        # Like libvirt names them: a, ..., z, aa, ab, ...
         suffix = ""
-        index = len(self.xml_model.devices.disk_list) + 1
+        index = len(disks) + 1
         while index > 0:
             index, remainder = divmod(index - 1, 26)
             suffix = chr(ord("a") + remainder) + suffix
-
         disk.xml_model.target = lvdomain.disk_target(
             dev=prefix + suffix, bus=cast(Any, bus)
         )
-
-        self.xml_model.devices.disk_list.append(disk.xml_model)
+        disks.append(disk.xml_model)
 
         return self
 
     def next_pci_address(self) -> lvdomain.diskspec_address | None:
-        assert (
-            self.xml_model.devices is not None
-            and self.xml_model.devices.interface_list is not None
-            and self.xml_model.devices.controller_list is not None
-        )
-        arch = self.get_arch()
-
-        slots = ARCH_DEFAULTS[arch].pci_slots
+        slots = self.get_defaults().pci_slots
         if slots is None:
             return None
 
-        devices: list[lvdomain.devices_interface | lvdomain.controller] = [
-            *self.xml_model.devices.interface_list,
-            *self.xml_model.devices.controller_list,
+        devices = self.get_devices()
+        assert (
+            devices.interface_list is not None and devices.controller_list is not None
+        )
+        addressed: list[lvdomain.devices_interface | lvdomain.controller] = [
+            *devices.interface_list,
+            *devices.controller_list,
         ]
-        used = {d.address.slot for d in devices if d.address is not None}
-        try:
-            slot = next(slot for slot in slots if slot not in used)
-        except StopIteration:
-            raise RuntimeError(
-                f"no free PCI slot left for {arch} (all of {slots} are used)"
-            ) from None
+        used = {d.address.slot for d in addressed if d.address is not None}
+        free = [slot for slot in slots if slot not in used]
+        if not free:
+            raise RuntimeError(f"There's no free PCI slot left (of {slots})")
 
         return lvdomain.diskspec_address(
-            type="pci", domain=0, bus=0, slot=slot, function=0
+            type="pci", domain=0, bus=0, slot=free[0], function=0
         )
 
     def interface(self, interface: InterfaceModel) -> Self:
-        assert (
-            self.xml_model.devices is not None
-            and self.xml_model.devices.interface_list is not None
-        )
+        interfaces = self.get_devices().interface_list
+        assert interfaces is not None
 
+        if interface.xml_model.model is None:
+            interface.default_model(self.get_arch())
         if interface.xml_model.address is None:
             interface.xml_model.address = self.next_pci_address()
-
-        self.xml_model.devices.interface_list.append(interface.xml_model)
+        interfaces.append(interface.xml_model)
 
         return self
 
     def default_type(self) -> Self:
-        self.xml_model.type = (
-            "kvm"
-            if self.xml_model.os is not None
-            and self.xml_model.os.type.arch is not None
-            and have_kvm(self.xml_model.os.type.arch)
-            else "qemu"
-        )
+        self.xml_model.type = "kvm" if have_kvm(self.get_arch()) else "qemu"
 
         return self
 
     def default_machine(self) -> Self:
-        arch = self.get_arch()
         assert self.xml_model.os is not None
 
-        self.xml_model.os.type.machine = ARCH_DEFAULTS[arch].machine
+        self.xml_model.os.type.machine = self.get_defaults().machine
 
         return self
 
     def default_cpu(self) -> Self:
-        assert self.xml_model.os is not None and self.xml_model.os.type.arch is not None
-
         if self.xml_model.type == "kvm":
             self.xml_model.cpu = lvdomain.guestcpu(
                 mode="host-passthrough", check="none", migratable="on"
             )
-        elif (mode := ARCH_DEFAULTS[self.xml_model.os.type.arch].tcg_cpu) is not None:
+        elif (mode := self.get_defaults().tcg_cpu) is not None:
             self.xml_model.cpu = lvdomain.guestcpu(mode=cast(Any, mode))
 
         return self
 
     def default_features(self) -> Self:
-        arch = self.get_arch()
+        defaults = self.get_defaults()
+        if not (defaults.apic or defaults.acpi or defaults.gic):
+            return self
 
-        metadata = ARCH_DEFAULTS[arch]
-        if metadata.apic or metadata.acpi or metadata.gic:
-            self.xml_model.features = lvdomain.features(
-                apic=lvdomain.apic() if metadata.apic else None,
-                acpi=lvdomain.features_acpi() if metadata.acpi else None,
-                gic=lvdomain.gic(version="3") if metadata.gic else None,
-            )
+        self.xml_model.features = lvdomain.features(
+            apic=lvdomain.apic() if defaults.apic else None,
+            acpi=lvdomain.features_acpi() if defaults.acpi else None,
+            gic=lvdomain.gic(version="3") if defaults.gic else None,
+        )
 
         return self
 
     def default_devices(self) -> Self:
+        defaults = self.get_defaults()
+        devices = self.get_devices()
         assert (
-            self.xml_model.devices is not None
-            and self.xml_model.devices.video_list is not None
-            and self.xml_model.devices.graphics_list is not None
-            and self.xml_model.devices.input_list is not None
-            and self.xml_model.devices.controller_list is not None
-            and self.xml_model.devices.console_list is not None
+            devices.video_list is not None
+            and devices.graphics_list is not None
+            and devices.input_list is not None
+            and devices.controller_list is not None
+            and devices.console_list is not None
         )
-        arch = self.get_arch()
 
-        self.xml_model.devices.video_list.extend(
-            [
-                lvdomain.video(
-                    model=lvdomain.video_model(
-                        type=cast(Any, ARCH_DEFAULTS[arch].video)
-                    )
-                ),
-            ]
+        devices.video_list.append(
+            lvdomain.video(model=lvdomain.video_model(type=cast(Any, defaults.video)))
         )
-        self.xml_model.devices.graphics_list.extend(
-            [
-                lvdomain.graphics(type="vnc", port=-1),
-            ]
-        )
-        self.xml_model.devices.input_list.extend(
-            [
-                lvdomain.devices_input(type="tablet", bus="usb"),
-                lvdomain.devices_input(type="keyboard", bus="usb"),
-            ]
-        )
-        if ARCH_DEFAULTS[arch].pcie:
-            self.xml_model.devices.controller_list.extend(
-                [
-                    lvdomain.controller(type="pci", index=0, model="pcie-root"),
-                ]
+        devices.graphics_list.append(lvdomain.graphics(type="vnc", port=-1))
+        devices.input_list += [
+            lvdomain.devices_input(type="tablet", bus="usb"),
+            lvdomain.devices_input(type="keyboard", bus="usb"),
+        ]
+        if defaults.pcie:
+            devices.controller_list.append(
+                lvdomain.controller(type="pci", index=0, model="pcie-root")
             )
-        self.xml_model.devices.controller_list.extend(
-            [
-                lvdomain.controller(
-                    type="usb",
-                    index=0,
-                    model=cast(Any, ARCH_DEFAULTS[arch].usb_model),
-                    address=self.next_pci_address(),
-                ),
-            ]
+        devices.controller_list.append(
+            lvdomain.controller(
+                type="usb",
+                index=0,
+                model=cast(Any, defaults.usb_model),
+                address=self.next_pci_address(),
+            )
         )
-        self.xml_model.devices.console_list.extend(
-            [
-                lvdomain.console(
-                    type="pty",
-                    target=lvdomain.qemucdev_tgt_def(
-                        type=cast(Any, ARCH_DEFAULTS[arch].console_target)
-                    ),
+        devices.console_list.append(
+            lvdomain.console(
+                type="pty",
+                target=lvdomain.qemucdev_tgt_def(
+                    type=cast(Any, defaults.console_target)
                 ),
-            ]
+            )
         )
 
         return self
 
     def qemu_args(self, *args: str) -> Self:
-        if self.xml_model.commandline is None:
-            self.xml_model.commandline = lvdomain.commandline(arg_list=[])
-        assert self.xml_model.commandline.arg_list is not None
+        if self.xml_model.qemu_commandline is None:
+            self.xml_model.qemu_commandline = lvdomain.qemucmdline(arg_list=[])
+        assert self.xml_model.qemu_commandline.arg_list is not None
 
-        self.xml_model.commandline.arg_list.extend(lvdomain.arg(value=a) for a in args)
+        self.xml_model.qemu_commandline.arg_list.extend(
+            lvdomain.qemucmdline_arg(value=a) for a in args
+        )
 
         return self
 
     def default_qemu_args(self) -> Self:
-        arch = self.get_arch()
+        args = self.get_defaults().qemu_args
+        if not args:
+            return self
 
-        if ARCH_DEFAULTS[arch].qemu_args:
-            self.qemu_args(*ARCH_DEFAULTS[arch].qemu_args)
-
-        return self
+        return self.qemu_args(*args)
 
     def default(self) -> Self:
         return (
@@ -354,6 +251,35 @@ class MachineModel(Model[lvdomain.domain]):
             .default_devices()
             .default_qemu_args()
         )
+
+    def get_arch(self) -> str:
+        assert (
+            self.xml_model.os is not None and self.xml_model.os.type.arch is not None
+        ), "Set the architecture with `arch` first!"
+
+        return self.xml_model.os.type.arch
+
+    def get_name(self) -> str:
+        return self.xml_model.name.value
+
+    def get_defaults(self) -> ArchDefaults:
+        return ARCH_DEFAULTS[self.get_arch()]
+
+    def get_devices(self) -> lvdomain.devices:
+        assert self.xml_model.devices is not None
+
+        return self.xml_model.devices
+
+    def get_interfaces(self) -> list[InterfaceModel]:
+        return [
+            InterfaceModel(xml_model=i) for i in self.get_devices().interface_list or []
+        ]
+
+    def get_nvram(self) -> str | None:
+        if self.xml_model.os is None or self.xml_model.os.nvram is None:
+            return None
+
+        return self.xml_model.os.nvram.value
 
 
 class SnapshotModel(Model[lvdomainsnapshot.domainsnapshot]):

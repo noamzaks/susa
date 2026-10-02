@@ -3,6 +3,7 @@ from __future__ import annotations
 import random
 import shutil
 import subprocess
+import tempfile
 from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import Literal
@@ -11,7 +12,6 @@ import pytest
 from scapy.layers.inet import ICMP, IP
 from typing_extensions import override
 
-from susa import tmp_dir_path
 from susa.communicator.rlogin import RloginCommunicator
 from susa.communicator.serial import SerialCommunicator
 from susa.communicator.shell import ShellCommunicator, login
@@ -22,11 +22,11 @@ from susa.core.stream import SavedOutputStream
 from susa.libvirt.connection import Connection
 from susa.libvirt.disk_model import DiskModel
 from susa.libvirt.interface_model import InterfaceModel
+from susa.libvirt.linked_clone import LinkedClone
 from susa.libvirt.machine import LVMachine, LVSnapshot
 from susa.libvirt.machine_model import MachineModel
 from susa.libvirt.network import LVNetwork
 from susa.libvirt.network_model import NetworkModel
-from susa.linked_clone import LinkedClone
 from susa.utilities.generic import GIGA
 from susa.utilities.networking import ping, wait_until_ping
 
@@ -44,7 +44,7 @@ def nvram(tmp: Path, vars: str) -> Path:
 
 
 def finish(domain: MachineModel, disk: Path, network: NetworkModel) -> MachineModel:
-    interface = InterfaceModel().default(domain.get_arch())
+    interface = InterfaceModel()
     network.interface(interface)
     return domain.interface(interface).disk(DiskModel().source(disk))
 
@@ -210,15 +210,18 @@ def setup(
     if not DISKS[arch].exists():
         pytest.skip(f"{DISKS[arch]} doesn't exist")
 
-    with tmp_dir_path() as tmp:
+    with tempfile.TemporaryDirectory() as directory:
+        tmp = Path(directory)
+        # QEMU runs as another user, and reads the disk clone and NVRAM from here.
+        tmp.chmod(0o777)
         clone = LinkedClone(tmp / "disk.qcow2", DISKS[arch])
         # Each architecture gets its own subnet, so machines never share one.
         network = (
             NetworkModel().default().ip(f"10.0.{list(ARCHITECTURES).index(arch)}.1")
         )
-        domain = ARCHITECTURES[arch](Path(clone.path), tmp, network)
+        domain = ARCHITECTURES[arch](clone.path, tmp, network)
 
-        with LVNetwork(network) as n, LVMachine(domain) as machine:
+        with clone, LVNetwork(network) as n, LVMachine(domain) as machine:
             wait_until_ping(machine.ip, timeout=BOOT_TIMEOUT)
             # Machines may answer ping before they're done booting, which ends with the console going quiet.
             with machine.serial() as serial:
@@ -242,7 +245,9 @@ def network(setup: tuple[LVNetwork, LVMachine]) -> LVNetwork:
 
 @pytest.fixture(scope="module")
 def ready(base_machine: LVMachine) -> LVSnapshot:
-    return base_machine.snapshot()
+    snapshot = base_machine.snapshot()
+    snapshot.create()
+    return snapshot
 
 
 class SavedSerial(Serial):
@@ -351,7 +356,7 @@ UNAME = {name: name for name in ARCHITECTURES} | {
 
 @pytest.fixture
 def name(request: pytest.FixtureRequest) -> str:
-    """The name (in `ARCHITECTURES`) of the machine the test got."""
+    # The name (in `ARCHITECTURES`) of the machine the test got.
     result: str = request.node.callspec.params["setup"]
     return result
 

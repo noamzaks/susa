@@ -4,9 +4,18 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from typing_extensions import override
 
-class LinkedClone:
+from susa.core.resource import Resource
+
+
+class LinkedClone(Resource):
     def __init__(self, path: str | Path, source: str | Path) -> None:
+        self.path = Path(path)
+        self.source = Path(source)
+
+    @override
+    def create(self) -> None:
         subprocess.run(
             [
                 "qemu-img",
@@ -14,16 +23,17 @@ class LinkedClone:
                 "-f",
                 "qcow2",
                 "-b",
-                str(source),
+                str(self.source),
                 "-B",
                 "qcow2",
-                str(path),
+                str(self.path),
             ],
             check=True,
         )
 
-        self.source = source
-        self.path = path
+    @override
+    def destroy(self) -> None:
+        self.path.unlink()
 
     def commit(self, target: str | Path | None) -> None:
         if target is not None:
@@ -40,4 +50,4 @@ class LinkedClone:
             ["qemu-img", "rebase", "-f", "qcow2", "-b", base, "-B", "qcow2", self.path],
             check=True,
         )
-        self.source = base
+        self.source = Path(base)

@@ -8,7 +8,8 @@ import libvirt as lv
 
 
 class Connection:
-    _current: ClassVar[Connection | None] = None
+    # The innermost open connection is the current one.
+    _open: ClassVar[list[Connection]] = []
     _event_loop_lock: ClassVar[threading.Lock] = threading.Lock()
     _event_loop_started: ClassVar[bool] = False
 
@@ -22,9 +23,7 @@ class Connection:
 
         Connection._start_event_loop()
         self.conn = lv.open(self.uri)
-
-        if Connection._current is None:
-            Connection._current = self
+        Connection._open.append(self)
 
         return self.conn
 
@@ -34,29 +33,19 @@ class Connection:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        if Connection._current is self:
-            Connection._current = None
-
-        if self.conn is None:
-            return
-
+        assert self.conn is not None
+        Connection._open.remove(self)
         self.conn.close()
         self.conn = None
 
     @staticmethod
-    def current() -> Connection:
-        if Connection._current is None:
-            raise ValueError(
-                "Cannot get current libvirt connection as there isn't any!"
-            )
-
-        return Connection._current
-
-    @staticmethod
     def current_conn() -> lv.virConnect:
-        c = Connection.current()
-        assert c.conn is not None
-        return c.conn
+        if not Connection._open:
+            raise ValueError("There's no open libvirt connection!")
+
+        conn = Connection._open[-1].conn
+        assert conn is not None
+        return conn
 
     @staticmethod
     def _start_event_loop() -> None:

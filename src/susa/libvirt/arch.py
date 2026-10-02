@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import platform
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -61,3 +63,17 @@ ARCH_DEFAULTS: dict[str, ArchDefaults] = {
         qemu_args=("-cpu", "qemu32,family=4"),
     ),
 }
+
+
+# The host's architecture, by libvirt's name for it.
+def host_arch() -> str:
+    machine = platform.machine()
+    if machine in ("aarch64", "arm64"):
+        return "aarch64"
+    if machine in ("x86_64", "amd64", "AMD64"):
+        return "x86_64"
+    raise ValueError(f"Unknown host architecture: {machine!r}")
+
+
+def have_kvm(arch: str) -> bool:
+    return arch == host_arch() and Path("/dev/kvm").exists()

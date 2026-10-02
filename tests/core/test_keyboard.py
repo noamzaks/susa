@@ -38,5 +38,8 @@ def test_type_text_everything_printable() -> None:
 
 
 def test_type_text_unsupported() -> None:
+    keyboard = FakeKeyboard()
     with pytest.raises(ValueError, match="é"):
-        FakeKeyboard().type_text("é")
+        keyboard.type_text("abcé")
+    # Nothing was typed.
+    assert keyboard.presses == []

@@ -14,4 +14,5 @@ class SerialCommunicator(ShellCommunicator):
 
     @override
     def open_stream(self) -> InputOutputStream:
+        self.serial.create()
         return self.serial

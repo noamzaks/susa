@@ -15,8 +15,8 @@ class InterfaceModel(Model[lvdomain.devices_interface]):
 
     def __init__(
         self,
-        xml_model: lvdomain.devices_interface | None = None,
         mac: str | None = None,
+        xml_model: lvdomain.devices_interface | None = None,
     ) -> None:
         self.xml_model = xml_model or lvdomain.devices_interface(
             type="network",
