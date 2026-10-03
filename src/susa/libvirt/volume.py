@@ -13,8 +13,6 @@ from susa.libvirt.entity import LVEntity
 from susa.libvirt.stream import LVStream
 from susa.libvirt.volume_model import VolumeModel
 
-DOWNLOAD_TIMEOUT = 60
-
 
 class LVVolume(LVEntity[lv.virStorageVol, VolumeModel], Resource):
     def __init__(self, model: VolumeModel) -> None:
@@ -47,7 +45,7 @@ class LVVolume(LVEntity[lv.virStorageVol, VolumeModel], Resource):
         with tempfile.NamedTemporaryFile() as file:
             stream = LVStream(self.conn)
             self.value.download(stream.stream, 0, 0)
-            shutil.copyfileobj(stream.file(DOWNLOAD_TIMEOUT), file)
+            shutil.copyfileobj(stream.file(), file)
             stream.close()
             file.flush()
             if target is None:

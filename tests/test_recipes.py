@@ -8,8 +8,8 @@ import pydantic
 import pytest
 from typing_extensions import override
 
+from susa.communicator.login import Login
 from susa.communicator.serial import SerialCommunicator
-from susa.communicator.shell import Login
 from susa.core.machine import Serial, SerialAccessible
 from susa.libvirt import (
     DiskModel,

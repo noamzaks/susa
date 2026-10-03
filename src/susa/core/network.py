@@ -12,8 +12,6 @@ if TYPE_CHECKING:
     from scapy.packet import Packet
     from scapy.utils import PcapReader
 
-SNIFFER_TIMEOUT = 60
-
 
 class Network(Resource):
     @property
@@ -31,7 +29,7 @@ class Sniffer(Resource, OutputStream):
         from scapy.utils import PcapReader
 
         # scapy accepts file objects, but only annotates `str` where mypy looks.
-        return PcapReader(self.file(SNIFFER_TIMEOUT))  # type: ignore
+        return PcapReader(self.file())  # type: ignore
 
     def next_packet(self) -> Packet:
         return self.pcap.read_packet()

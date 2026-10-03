@@ -6,6 +6,7 @@ import libvirt as lv
 from typing_extensions import override
 
 from susa.core.stream import InputOutputStream
+from susa.utilities.generic import Deadline
 
 POLL_INTERVAL = 0.05
 CHUNK_SIZE = 1 << 16
@@ -19,8 +20,8 @@ class LVStream(InputOutputStream):
         self.eof = False
 
     @override
-    def read(self, size: int | None = None, timeout: float = 0) -> bytes:
-        deadline = time.monotonic() + timeout
+    def read(self, size: int | None = None, timeout: float | None = 0) -> bytes:
+        deadline = Deadline(timeout)
         while not self.eof:
             # -2 (despite its annotation) when there's nothing to read yet.
             data: bytes | int = self.stream.recv(size or CHUNK_SIZE)
@@ -28,7 +29,7 @@ class LVStream(InputOutputStream):
                 self.eof = not data
                 if data:
                     return data
-            elif time.monotonic() >= deadline:
+            elif deadline.passed():
                 return b""
             else:
                 time.sleep(POLL_INTERVAL)

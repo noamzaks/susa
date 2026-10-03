@@ -24,8 +24,6 @@ from susa.libvirt.network_model import NetworkModel
 from susa.libvirt.serial import LVSerial
 from susa.libvirt.stream import LVStream
 
-SCREENSHOT_TIMEOUT = 60
-
 
 class LVSnapshot(LVEntity[lv.virDomainSnapshot, SnapshotModel], Snapshot):
     def __init__(
@@ -145,7 +143,7 @@ class LVMachine(
     def screenshot(self) -> Screenshot:
         stream = LVStream(self.conn)
         mime_type = self.domain.screenshot(stream.stream, 0)
-        data = stream.read_all(SCREENSHOT_TIMEOUT)
+        data = stream.read_all()
         stream.close()
         return Screenshot(data, mime_type)
 

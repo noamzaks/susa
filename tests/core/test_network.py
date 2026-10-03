@@ -21,7 +21,7 @@ class FakeSniffer(Sniffer):
     def destroy(self) -> None: ...
 
     @override
-    def read(self, size: int | None = None, timeout: float = 0) -> bytes:
+    def read(self, size: int | None = None, timeout: float | None = 0) -> bytes:
         if not self.chunks:
             raise EOFError
         return self.chunks.pop(0)

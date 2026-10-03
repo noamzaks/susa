@@ -13,6 +13,7 @@ from typing_extensions import override
 from susa.core.interface import Interface
 from susa.core.resource import Resource
 from susa.core.stream import InputOutputStream, SavedOutputStream
+from susa.utilities.generic import Deadline
 from susa.utilities.networking import wait_until_ping
 
 if TYPE_CHECKING:
@@ -136,14 +137,15 @@ class SerialAccessible(ABC):
 # Booting is over once it answers ping and its serial console is quiet for `quiet_time`. If it isn't by `timeout`, the
 # error has what its console said meanwhile.
 def wait_until_booted(
-    machine: Machine, timeout: float = 120, quiet_time: float = 5
+    machine: Machine, timeout: float | None = None, quiet_time: float = 5
 ) -> None:
     assert isinstance(machine, SerialAccessible)
     with machine.serial() as serial:
         console = SavedOutputStream(serial)
+        deadline = Deadline(timeout)
         try:
-            wait_until_ping(machine.ip, timeout)
-            console.wait_until_quiet(quiet_time, timeout)
+            wait_until_ping(machine.ip, deadline.remaining())
+            console.wait_until_quiet(quiet_time, deadline.remaining())
         except (TimeoutError, EOFError) as e:
             with contextlib.suppress(EOFError):
                 console.read()

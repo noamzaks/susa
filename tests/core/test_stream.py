@@ -14,7 +14,7 @@ class FakeStream(OutputStream):
         self.chunks = list(chunks)
 
     @override
-    def read(self, size: int | None = None, timeout: float = 0) -> bytes:
+    def read(self, size: int | None = None, timeout: float | None = 0) -> bytes:
         return self.chunks.pop(0) if self.chunks else b""
 
 
@@ -36,8 +36,8 @@ class SlowStream(OutputStream):
         self.interval = interval
 
     @override
-    def read(self, size: int | None = None, timeout: float = 0) -> bytes:
-        if timeout < self.interval:
+    def read(self, size: int | None = None, timeout: float | None = 0) -> bytes:
+        if timeout is not None and timeout < self.interval:
             time.sleep(timeout)
             return b""
         time.sleep(self.interval)

@@ -15,6 +15,7 @@ from susa.communicator.rlogin import RloginCommunicator
 from susa.communicator.serial import SerialCommunicator
 from susa.communicator.ssh import SSHCommunicator
 from susa.communicator.telnet import TelnetCommunicator
+from susa.communicator.unix import UnixCommunicator
 from susa.libvirt.disk_model import DiskModel
 from susa.libvirt.interface_model import InterfaceModel
 from susa.libvirt.machine import LVMachine
@@ -40,6 +41,7 @@ CLASSES: dict[str, type[Any]] = {
         SSHCommunicator,
         TelnetCommunicator,
         RloginCommunicator,
+        UnixCommunicator,
     )
 }
 

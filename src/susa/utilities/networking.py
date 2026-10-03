@@ -16,6 +16,7 @@ from susa.utilities.generic import wait_until
 
 PING_REPLY_PATTERN = re.compile(r"icmp_seq=(\d+)\b.*?\btime=([\d.]+) ms")
 SUBNETS = ipaddress.IPv4Network("10.0.0.0/8")
+PING_TIMEOUT = 2
 # A byte per subnet, locked by the process that took it.
 LOCK = Path(tempfile.gettempdir()) / "susa-subnets.lock"
 # The subnets this process took (its own locks don't stop it).
@@ -76,11 +77,12 @@ def ping(
     return times[0] if count == 1 else times
 
 
-def wait_until_ping(host: str, timeout: float) -> None:
-    wait_until(
-        test=lambda timeout: ping(host, timeout=min(2, timeout)) is not None,
-        timeout=timeout,
-    )
+def wait_until_ping(host: str, timeout: float | None = None) -> None:
+    def answers(remaining: float | None) -> bool:
+        attempt = PING_TIMEOUT if remaining is None else min(PING_TIMEOUT, remaining)
+        return ping(host, timeout=attempt) is not None
+
+    wait_until(answers, timeout)
 
 
 def random_mac(prefix: str | None = None) -> str:

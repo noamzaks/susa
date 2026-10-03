@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import os
 import random
 import shutil
@@ -13,6 +14,8 @@ import pytest
 from scapy.layers.inet import ICMP, IP
 
 from susa.communicator.shell import ShellCommunicator
+from susa.communicator.unix import UnixCommunicator
+from susa.core.communicator import FileTransferrer
 from susa.core.machine import wait_until_booted
 from susa.core.session import Session
 from susa.libvirt import (
@@ -144,9 +147,6 @@ COMMUNICATORS: dict[str, dict[str, Any]] = {
     "ssh-scp": {
         "susa.communicator.ssh.SSHCommunicator": {**LOGIN, "file_transfer": "scp"}
     },
-    "ssh-shell": {
-        "susa.communicator.ssh.SSHCommunicator": {**LOGIN, "file_transfer": "shell"}
-    },
     "telnet": {"susa.communicator.telnet.TelnetCommunicator": LOGIN},
     "rlogin": {"susa.communicator.rlogin.RloginCommunicator": LOGIN},
 }
@@ -229,17 +229,37 @@ def test_serial(machine: LVMachine) -> None:
         assert serial.read(timeout=30)
 
 
-def communicator(machine: LVMachine, kind: str) -> ShellCommunicator:
+@contextlib.contextmanager
+def shell(machine: LVMachine, kind: str) -> Iterator[ShellCommunicator]:
     if shutil.which(CLIENTS.get(kind, "true")) is None:
         pytest.skip(f"There's no {CLIENTS[kind]} client")
     result: ShellCommunicator = Recipe.model_validate(COMMUNICATORS[kind]).make(
         machine=machine
     )
-    return result
+    with result:
+        yield result
+
+
+@contextlib.contextmanager
+def unix(machine: LVMachine, kind: str) -> Iterator[UnixCommunicator]:
+    with shell(machine, kind) as communicator, UnixCommunicator(communicator) as u:
+        yield u
+
+
+@contextlib.contextmanager
+def transferrer(machine: LVMachine, kind: str) -> Iterator[FileTransferrer]:
+    if kind in ("ssh", "ssh-scp"):
+        with shell(machine, kind) as ssh:
+            assert isinstance(ssh, FileTransferrer)
+            yield ssh
+    else:
+        with unix(machine, kind.removesuffix("-unix")) as u:
+            yield u
 
 
 CLIENTS = {"telnet": "telnet", "rlogin": "rlogin"}
 SHELLS = ("serial", "ssh", "telnet", "rlogin")
+TRANSFERRERS = ("serial", "ssh", "ssh-scp", "ssh-unix", "telnet", "rlogin")
 UNAME = {name: name for name in IMAGES} | {
     # The CPU is i486-class (see `ARCH_DEFAULTS`).
     "i386": "i486",
@@ -250,8 +270,8 @@ UNAME = {name: name for name in IMAGES} | {
 
 @pytest.mark.parametrize("kind", SHELLS)
 def test_uname(machine: LVMachine, name: str, kind: str) -> None:
-    with communicator(machine, kind) as c:
-        result = c.run("uname -m")
+    with unix(machine, kind) as u:
+        result = u.run("uname -m")
         assert (result.returncode, result.stdout, result.stderr) == (
             0,
             f"{UNAME[name]}\n".encode(),
@@ -261,33 +281,33 @@ def test_uname(machine: LVMachine, name: str, kind: str) -> None:
 
 @pytest.mark.parametrize("kind", SHELLS)
 def test_run(machine: LVMachine, kind: str) -> None:
-    with communicator(machine, kind) as c:
-        result = c.run("echo a; echo b >&2; false")
+    with unix(machine, kind) as u:
+        result = u.run("echo a; echo b >&2; false")
         assert (result.returncode, result.stdout, result.stderr) == (1, b"a\n", b"b\n")
-        assert c.execute("cd /tmp; pwd").stdout == b"/tmp\n"
-        assert c.execute("pwd").stdout == b"/tmp\n"
+        assert u.communicator.check("cd /tmp; pwd") == b"/tmp\n"
+        assert u.communicator.check("pwd") == b"/tmp\n"
 
 
 @pytest.mark.parametrize("kind", SHELLS)
 def test_start(machine: LVMachine, kind: str) -> None:
-    with communicator(machine, kind) as c:
-        command = c.start("echo started; sleep 2; echo done >&2")
+    with unix(machine, kind) as u:
+        command = u.start("echo started; sleep 2; echo done >&2")
         assert command.stdout.read_until(b"started\n", timeout=10) == b"started\n"
         assert command.poll() is None
         assert command.wait() == 0
         assert command.stderr.read() == b"done\n"
 
 
-@pytest.mark.parametrize("kind", COMMUNICATORS)
+@pytest.mark.parametrize("kind", TRANSFERRERS)
 def test_transfer(machine: LVMachine, kind: str, tmp_path: Path) -> None:
     data = [random.randbytes(5000) for _ in range(3)]
     for i, content in enumerate(data):
         (tmp_path / f"up{i}").write_bytes(content)
-    with communicator(machine, kind) as c:
-        c.upload_single(tmp_path / "up0", "/tmp/susa0")
-        c.download_single("/tmp/susa0", tmp_path / "down0")
-        c.upload({tmp_path / f"up{i}": f"/tmp/susa{i}" for i in (1, 2)})
-        c.download({f"/tmp/susa{i}": tmp_path / f"down{i}" for i in (1, 2)})
+    with transferrer(machine, kind) as t:
+        t.upload_single(tmp_path / "up0", "/tmp/susa0")
+        t.download_single("/tmp/susa0", tmp_path / "down0")
+        t.upload({tmp_path / f"up{i}": f"/tmp/susa{i}" for i in (1, 2)})
+        t.download({f"/tmp/susa{i}": tmp_path / f"down{i}" for i in (1, 2)})
     for i, content in enumerate(data):
         assert (tmp_path / f"down{i}").read_bytes() == content
 
@@ -300,8 +320,8 @@ def test_power_cycle(machine: LVMachine, kind: str) -> None:
 
     machine.power_on()
     assert machine.is_powered_on
-    with communicator(machine, kind) as c:
-        assert c.check("echo up") == b"up\n"
+    with shell(machine, kind) as s:
+        assert s.check("echo up") == b"up\n"
 
 
 def test_sniff(machine: LVMachine, network: LVNetwork) -> None:
@@ -330,8 +350,8 @@ def test_commit(
 ) -> None:
     if name != "freebsd10":
         pytest.skip("Committing is tried on freebsd10")
-    with communicator(machine, "ssh") as c:
-        c.check("echo committed > /root/susa-commit")
+    with shell(machine, "ssh") as ssh:
+        ssh.check("echo committed > /root/susa-commit")
     # Cleanly, so the file system is written out.
     machine.shutdown()
     wait_until(lambda _: not machine.is_powered_on, BOOT_TIMEOUT)

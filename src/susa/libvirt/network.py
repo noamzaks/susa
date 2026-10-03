@@ -78,7 +78,7 @@ class LVSniffer(Sniffer):
         self.process.wait()
 
     @override
-    def read(self, size: int | None = None, timeout: float = 0) -> bytes:
+    def read(self, size: int | None = None, timeout: float | None = 0) -> bytes:
         assert self.process is not None and self.process.stdout is not None
         if not select.select([self.process.stdout], [], [], timeout)[0]:
             return b""

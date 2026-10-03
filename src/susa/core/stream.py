@@ -1,49 +1,51 @@
 from __future__ import annotations
 
 import io
-import time
 from abc import ABC, abstractmethod
 from typing import Any, BinaryIO
 
 from pexpect.spawnbase import SpawnBase
 from typing_extensions import override
 
+from susa.utilities.generic import Deadline
 
+
+# Reads take a timeout, where `None` waits for data (or the end).
 class OutputStream(ABC):
     @abstractmethod
-    def read(self, size: int | None = None, timeout: float = 0) -> bytes: ...
+    def read(self, size: int | None = None, timeout: float | None = 0) -> bytes: ...
 
-    def read_until(self, expected: bytes, timeout: float) -> bytes:
-        deadline = time.monotonic() + timeout
+    def read_until(self, expected: bytes, timeout: float | None = None) -> bytes:
+        deadline = Deadline(timeout)
         result = b""
         while expected not in result:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
+            if deadline.passed():
                 raise TimeoutError(
                     f"{expected!r} didn't appear within {timeout} seconds (got {result!r})"
                 )
-            result += self.read(timeout=remaining)
+            result += self.read(timeout=deadline.remaining())
         return result
 
-    def read_all(self, timeout: float) -> bytes:
-        deadline = time.monotonic() + timeout
+    def read_all(self, timeout: float | None = None) -> bytes:
+        deadline = Deadline(timeout)
         result = b""
-        while (remaining := deadline - time.monotonic()) > 0:
+        while not deadline.passed():
             try:
-                result += self.read(timeout=remaining)
+                result += self.read(timeout=deadline.remaining())
             except EOFError:
                 return result
         raise TimeoutError(f"The stream didn't end within {timeout} seconds")
 
-    def file(self, timeout: float) -> BinaryIO:
+    def file(self, timeout: float | None = None) -> BinaryIO:
         return io.BufferedReader(OutputStreamFile(self, timeout))
 
     def is_quiet(self, duration: float) -> bool:
         return self.read(timeout=duration) == b""
 
-    def wait_until_quiet(self, quiet_time: float, timeout: float) -> None:
-        deadline = time.monotonic() + timeout
-        while deadline - time.monotonic() >= quiet_time:
+    # Never starting a quiet period that can't end before the timeout.
+    def wait_until_quiet(self, quiet_time: float, timeout: float | None = None) -> None:
+        deadline = Deadline(timeout)
+        while (remaining := deadline.remaining()) is None or remaining >= quiet_time:
             if self.is_quiet(quiet_time):
                 return
         raise TimeoutError(
@@ -64,7 +66,7 @@ class InputOutputStream(OutputStream, InputStream):
 
 
 class OutputStreamFile(io.RawIOBase):
-    def __init__(self, stream: OutputStream, timeout: float) -> None:
+    def __init__(self, stream: OutputStream, timeout: float | None) -> None:
         self.stream = stream
         self.timeout = timeout
 
@@ -90,7 +92,7 @@ class SavedOutputStream(OutputStream):
         self.data = b""
 
     @override
-    def read(self, size: int | None = None, timeout: float = 0) -> bytes:
+    def read(self, size: int | None = None, timeout: float | None = 0) -> bytes:
         result = self.stream.read(size=size, timeout=timeout)
         self.data += result
         return result
@@ -104,6 +106,4 @@ class PexpectStream(SpawnBase):  # type: ignore
 
     @override
     def read_nonblocking(self, size: int = 1, timeout: float | None = None) -> bytes:
-        # Sanity.
-        assert timeout is not None
         return self.stream.read(size, timeout)
