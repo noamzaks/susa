@@ -12,17 +12,20 @@ from typing import TypeAlias
 import pexpect
 from typing_extensions import override
 
-from susa.communicator.posix import PosixFileTransfer, printf_lines
+from susa.communicator.posix import PosixFileTransfer, printf_command
 from susa.core.communicator import AsyncCommand, AsyncCommandRunner
-from susa.core.machine import Machine
 from susa.core.stream import InputOutputStream, InputStream, OutputStream, PexpectStream
 
-EXIT = re.compile(rb"SUSA-EXIT-(\d+)\n")
+# Before the setup turns output translation off, newlines come out as "\r\n".
+EXIT = re.compile(rb"SUSA-EXIT-(\d+)\r?\n")
 MARK_EXIT = b"echo SUSA-EXIT-$?"
+READY = "SUSA-READY"
 # No line editing (which may reset the terminal's settings), job notifications, echo, output translation, bells
 # (when input fills up) or prompts, so the output of commands is exactly what they wrote.
 SETUP = b"set +m +o emacs +o vi; stty -echo -opost -imaxbel; PS1=''; PS2=''"
+CONNECT_TIMEOUT = 600
 SETUP_TIMEOUT = 60
+RECONNECT_INTERVAL = 1
 SETUP_ATTEMPT_TIMEOUT = 10
 RECOVERY_QUIET_TIME = 1
 POLL_INTERVAL = 0.2
@@ -58,9 +61,7 @@ class ShellInputStream(InputStream):
 
     @override
     def write(self, data: bytes) -> None:
-        self.shell.execute(
-            " &&\n".join(printf_lines(data, self.path))
-        ).check_returncode()
+        self.shell.posix(printf_command(data, self.path))
 
     @override
     def close(self) -> None:
@@ -78,7 +79,7 @@ class ShellOutputStream(OutputStream):
 
     @override
     def read(self, size: int | None = None, timeout: float = 0) -> bytes:
-        deadline = time.time() + timeout
+        deadline = time.monotonic() + timeout
         head = "" if size is None else f" | head -c {size}"
         while True:
             finished = self.command.poll() is not None
@@ -90,7 +91,7 @@ class ShellOutputStream(OutputStream):
                 return data
             if finished:
                 raise EOFError
-            if time.time() >= deadline:
+            if time.monotonic() >= deadline:
                 return b""
             time.sleep(POLL_INTERVAL)
 
@@ -98,8 +99,10 @@ class ShellOutputStream(OutputStream):
 class ShellCommand(AsyncCommand):
     def __init__(self, shell: ShellCommunicator, command: str) -> None:
         self.shell = shell
-        directory = shlex.quote(shell.execute("mktemp -d").stdout.decode().strip())
-        shell.execute(f"mkfifo {directory}/in").check_returncode()
+        assert shell.directory is not None
+        template = shlex.quote(f"{shell.directory}/command.XXXXXX")
+        directory = shlex.quote(shell.posix(f"mktemp -d {template}").decode().strip())
+        shell.posix(f"mkfifo {directory}/in")
         self.pid = shell.background(
             f"sh -c {shlex.quote(command)} < {directory}/in > {directory}/out 2> {directory}/err"
         )
@@ -153,60 +156,90 @@ class ShellCommunicator(PosixFileTransfer, AsyncCommandRunner):
         self.quiet_time = quiet_time
         self.stream: InputOutputStream | None = None
         self.output: PexpectStream | None = None
+        self.directory: str | None = None
 
     @abstractmethod
     def open_stream(self) -> InputOutputStream: ...
 
+    # The machine may still be booting (e.g. refusing connections, or not at its login prompt yet), so this tries again
+    # until the shell is ready, connecting again if the connection ended.
     @override
     def create(self) -> None:
-        stream = self.open_stream()
-        stream.wait_until_quiet(self.quiet_time, SETUP_TIMEOUT)
-        if self.prelude is not None:
-            self.prelude(stream)
-            stream.wait_until_quiet(self.quiet_time, SETUP_TIMEOUT)
-        output = PexpectStream(stream)
-        deadline = time.time() + SETUP_TIMEOUT
-        # Input sent before the shell is ready (e.g. while logging in) may be partly discarded, so retry, clearing
-        # the line first (but not before the first attempt, since interrupting a shell that's starting may kill it).
+        deadline = time.monotonic() + CONNECT_TIMEOUT
         while True:
-            # One line, since turning line editing off discards whatever it already read.
-            stream.write(SETUP + b"; " + MARK_EXIT + ENTER)
+            self.stream = self.open_stream()
             try:
-                output.expect(EXIT, SETUP_ATTEMPT_TIMEOUT)
+                # Interrupting clears what earlier attempts left (e.g. a half-typed login), but not on a new connection,
+                # since interrupting a client or a shell that's starting may kill it.
+                interrupt = False
+                while not self.attach(interrupt):
+                    check_deadline(deadline)
+                    interrupt = True
                 break
-            except pexpect.TIMEOUT:
-                if time.time() > deadline:
-                    raise TimeoutError("The shell didn't become ready") from None
-                stream.write(INTERRUPT)
-        stream.wait_until_quiet(RECOVERY_QUIET_TIME, SETUP_TIMEOUT)
-        output.buffer = b""
-        self.stream, self.output = stream, output
+            except EOFError:
+                self.stream.close()
+                check_deadline(deadline)
+                time.sleep(RECONNECT_INTERVAL)
+        self.directory = self.posix("mktemp -d").decode().strip()
+
+    # Whether logging in (with the prelude) and setting up the shell worked.
+    def attach(self, interrupt: bool) -> bool:
+        assert self.stream is not None
+        if interrupt:
+            self.stream.write(INTERRUPT)
+        try:
+            self.stream.wait_until_quiet(self.quiet_time, SETUP_TIMEOUT)
+            if self.prelude is not None:
+                self.prelude(self.stream)
+                self.stream.wait_until_quiet(self.quiet_time, SETUP_TIMEOUT)
+            self.output = PexpectStream(self.stream)
+            # Programs the shell starts with may discard part of what's typed (e.g. FreeBSD's resizewin), and what's
+            # left of the setup could start one (e.g. `vi`). What's left of an exit marker can't, so the setup waits
+            # for one to show the shell's reading.
+            self.stream.write(MARK_EXIT + ENTER)
+            if not self.expect_exit(SETUP_ATTEMPT_TIMEOUT):
+                return False
+            # One line, since turning line editing off discards whatever it already read.
+            self.stream.write(SETUP + b"; " + MARK_EXIT + ENTER)
+            if not self.expect_exit(SETUP_ATTEMPT_TIMEOUT):
+                return False
+            self.stream.wait_until_quiet(RECOVERY_QUIET_TIME, SETUP_TIMEOUT)
+            self.output.buffer = b""
+            # Part of the setup may have been discarded (e.g. by a program the shell was still running) with the marker
+            # still sent, so the output's checked to be exactly what a command writes.
+            probe = self.execute(f"echo {READY}", SETUP_ATTEMPT_TIMEOUT)
+        except TimeoutError:
+            return False
+        return probe.stdout == f"{READY}\n".encode()
 
     @override
     def destroy(self) -> None:
-        assert self.stream is not None
+        assert self.stream is not None and self.directory is not None
+        self.execute(f"rm -r {shlex.quote(self.directory)}")
         self.stream.write(b"exit" + ENTER)
         self.stream.close()
-        self.stream, self.output = None, None
+        self.stream, self.output, self.directory = None, None, None
 
+    @override
     def execute(self, command: str, timeout: float = 60) -> CompletedProcess[bytes]:
         assert self.stream is not None and self.output is not None
         self.stream.write(command.encode() + ENTER + MARK_EXIT + ENTER)
-        try:
-            self.output.expect(EXIT, timeout)
-        except pexpect.TIMEOUT:
+        if not self.expect_exit(timeout):
             # Interrupting usually also discards the pending marker line, so send it again.
             self.stream.write(INTERRUPT + MARK_EXIT + ENTER)
-            self.output.expect(EXIT, SETUP_ATTEMPT_TIMEOUT)
+            self.expect_exit(SETUP_ATTEMPT_TIMEOUT)
             self.stream.wait_until_quiet(RECOVERY_QUIET_TIME, SETUP_TIMEOUT)
             self.output.buffer = b""
-            raise TimeoutError(
-                f"{command!r} took more than {timeout} seconds"
-            ) from None
+            raise TimeoutError(f"{command!r} took more than {timeout} seconds")
         before, match = self.output.before, self.output.match
         # Sanity.
         assert before is not None and isinstance(match, re.Match)
         return CompletedProcess(command, int(match.group(1)), before)
+
+    # Whether the exit marker arrived in time.
+    def expect_exit(self, timeout: float) -> bool:
+        assert self.output is not None
+        return self.output.expect([EXIT, pexpect.TIMEOUT], timeout) == 0
 
     @override
     def start(self, command: str) -> ShellCommand:
@@ -219,13 +252,6 @@ class ShellCommunicator(PosixFileTransfer, AsyncCommandRunner):
         return started.stdout.split()[-1].decode()
 
 
-# A shell reached over the network: on a machine (at its IP, once it has one), or at an address (e.g. of a host SUSA
-# doesn't manage).
-class NetworkCommunicator(ShellCommunicator):
-    def __init__(self, machine: Machine | str, prelude: Prelude | None = None) -> None:
-        super().__init__(prelude)
-        self.machine = machine
-
-    @property
-    def host(self) -> str:
-        return self.machine if isinstance(self.machine, str) else self.machine.ip
+def check_deadline(deadline: float) -> None:
+    if time.monotonic() > deadline:
+        raise TimeoutError("The shell didn't become ready")

@@ -7,6 +7,7 @@ from subprocess import CalledProcessError, CompletedProcess
 import pytest
 from typing_extensions import override
 
+from susa.communicator import shell as shell_module
 from susa.communicator.process import ProcessStream
 from susa.communicator.shell import ENTER, Prelude, ShellCommunicator
 from susa.core.stream import InputOutputStream
@@ -37,7 +38,7 @@ def result(result: CompletedProcess[bytes]) -> tuple[int, bytes, bytes | None]:
 
 
 def assert_gone(shell: ShellCommunicator, pattern: str) -> None:
-    """Signalled processes exit asynchronously, so give them a moment."""
+    # Signalled processes exit asynchronously, so give them a moment.
     shell.check(
         f"(for i in $(seq 50); do pgrep -f '^{pattern}$' > /dev/null || exit 0; sleep 0.1; done; exit 1)"
     )
@@ -158,3 +159,20 @@ def test_start_stdin(shell: LocalShell) -> None:
         assert command.stdout.read_all(timeout=5) == b"done\n"
         with pytest.raises(EOFError):
             command.stdout.read()
+
+
+# A program the shell starts with may discard what's typed, e.g. FreeBSD's resizewin, which reads the terminal's reply to
+# a query (in raw mode, so even Ctrl-C). Wherever that stops, the shell ends up fully set up.
+@pytest.mark.parametrize("discarded", range(64))
+def test_discarded_input(
+    discarded: int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(shell_module, "SETUP_ATTEMPT_TIMEOUT", 0.5)
+    monkeypatch.setattr(shell_module, "RECOVERY_QUIET_TIME", 0.1)
+    start = f"stty raw -echo; head -c {discarded} > /dev/null; stty sane"
+    shell = LocalShell(
+        ["sh", "-c", f"cd {tmp_path}; {start}; exec bash --norc --noprofile -i"]
+    )
+    shell.quiet_time = 0.2
+    with shell:
+        assert shell.execute("echo exact").stdout == b"exact\n"

@@ -4,11 +4,9 @@
     <type arch="i686" machine="q35">hvm</type>
   </os>
   <features>
-    <apic />
     <acpi />
   </features>
   <devices>
-    <controller index="0" type="pci" model="pcie-root" />
     <controller index="0" type="usb" />
     <interface type="network">
       <source network="test" />
@@ -21,9 +19,7 @@
     <video>
       <model type="virtio" />
     </video>
-    <console type="pty">
-      <target type="serial" />
-    </console>
+    <console type="pty" />
   </devices>
   <qemu:commandline>
     <qemu:arg value="-cpu" />

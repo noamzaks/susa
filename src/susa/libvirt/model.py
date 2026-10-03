@@ -1,23 +1,18 @@
 from __future__ import annotations
 
+import typing
 import xml.etree.ElementTree as ET
-from abc import abstractmethod
-from typing import ClassVar, Generic, TypeVar, cast
+from abc import ABC, abstractmethod
+from typing import Generic, TypeVar
 
-import pydantic
 import pydantic_xml
-from pydantic_core import core_schema
 from typing_extensions import Self, override
-
-from susa.utilities.recipe import recipe_schema
-from susa.utilities.serializable import Serializable
 
 T = TypeVar("T", bound=pydantic_xml.BaseXmlModel)
 
 
-class Model(Serializable, Generic[T]):
+class Model(ABC, Generic[T]):
     xml_model: T
-    xml_model_type: ClassVar[type[pydantic_xml.BaseXmlModel]]
 
     @abstractmethod
     def __init__(self, xml_model: T | None = None) -> None: ...
@@ -29,29 +24,16 @@ class Model(Serializable, Generic[T]):
 
     @classmethod
     def parse(cls, xml: str | bytes) -> Self:
-        return cls(xml_model=cast(T, cls.xml_model_type.from_xml(xml)))
+        return cls(xml_model=cls.xml_model_type().from_xml(xml))
+
+    # The `T` it's a `Model` of.
+    @classmethod
+    def xml_model_type(cls) -> type[T]:
+        [base] = cls.__orig_bases__  # type: ignore
+        [xml_model_type] = typing.get_args(base)
+        return typing.cast("type[T]", xml_model_type)
 
     # Models are values.
     @override
     def __eq__(self, other: object) -> bool:
         return type(other) is type(self) and other.build() == self.build()
-
-    # A recipe (see `recipe_schema`) or XML.
-    @classmethod
-    @override
-    def serialized_schema(
-        cls, handler: pydantic.GetCoreSchemaHandler
-    ) -> core_schema.CoreSchema:
-        return core_schema.tagged_union_schema(
-            {
-                "recipe": recipe_schema(cls),
-                "xml": core_schema.no_info_after_validator_function(
-                    cls.parse, core_schema.str_schema()
-                ),
-            },
-            lambda value: "xml" if isinstance(value, str) else "recipe",
-        )
-
-    @override
-    def serialize(self) -> str:
-        return self.build()

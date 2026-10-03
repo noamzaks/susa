@@ -8,10 +8,9 @@ import time
 import libvirt as lv
 from typing_extensions import override
 
-from susa.core.interface import Interface
+from susa.core.interface import BasicInterface, Interface
 from susa.core.network import Network, Sniffable, Sniffer
-from susa.libvirt.entity import LVEntity, LVEntityState
-from susa.libvirt.interface import LVInterface
+from susa.libvirt.entity import LVEntity
 from susa.libvirt.network_model import NetworkModel
 
 CHUNK_SIZE = 1 << 16
@@ -19,11 +18,8 @@ CAPTURE_DRAIN_TIME = 1
 
 
 class LVNetwork(LVEntity[lv.virNetwork, NetworkModel], Network, Sniffable):
-    state_type = LVEntityState[NetworkModel]
-
-    # Spelled out for recipes, which would otherwise see `LVEntity`'s (generic) parameters.
-    def __init__(self, model: NetworkModel, conn: lv.virConnect | None = None) -> None:
-        super().__init__(model, conn)
+    def __init__(self, model: NetworkModel) -> None:
+        super().__init__(model)
 
     @property
     @override
@@ -34,7 +30,8 @@ class LVNetwork(LVEntity[lv.virNetwork, NetworkModel], Network, Sniffable):
     @override
     def interfaces(self) -> list[Interface]:
         # libvirt doesn't record which interfaces are connected to a network, only the IPs reserved for them.
-        return [LVInterface(mac, ip) for mac, ip in self.model.get_hosts().items()]
+        hosts = self.model.get_hosts() or []
+        return [BasicInterface(h.mac, h.ip) for h in hosts if h.mac is not None]
 
     @override
     def create(self) -> None:
@@ -53,7 +50,8 @@ class LVNetwork(LVEntity[lv.virNetwork, NetworkModel], Network, Sniffable):
 
     @override
     def sniffer(self) -> LVSniffer:
-        return LVSniffer(self.model.get_bridge())
+        assert self.value is not None
+        return LVSniffer(self.value.bridgeName())
 
 
 class LVSniffer(Sniffer):
@@ -73,7 +71,6 @@ class LVSniffer(Sniffer):
 
     @override
     def destroy(self) -> None:
-        # What was captured can still be read.
         assert self.process is not None
         # Let packets that were just captured reach tcpdump.
         time.sleep(CAPTURE_DRAIN_TIME)

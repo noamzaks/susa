@@ -1,35 +1,24 @@
 from __future__ import annotations
 
-from typing import cast
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
 
 import libvirt as lv
-from typing_extensions import Self, override
+from typing_extensions import override
 
 from susa.core.resource import Resource
-from susa.libvirt.entity import LVEntity, LVEntityState
+from susa.libvirt.entity import LVEntity
+from susa.libvirt.stream import LVStream
 from susa.libvirt.volume_model import VolumeModel
 
-
-class LVVolumeState(LVEntityState[VolumeModel]):
-    # pydantic doesn't substitute `M` in inherited fields.
-    model: VolumeModel
-    pool: str
+DOWNLOAD_TIMEOUT = 60
 
 
 class LVVolume(LVEntity[lv.virStorageVol, VolumeModel], Resource):
-    state_type = LVVolumeState
-
-    # Made as a copy of `source` (see `commit`) if given.
-    def __init__(
-        self,
-        model: VolumeModel,
-        pool: str = "default",
-        source: LVVolume | None = None,
-        conn: lv.virConnect | None = None,
-    ) -> None:
-        super().__init__(model, conn)
-        self.pool = pool
-        self.source = source
+    def __init__(self, model: VolumeModel) -> None:
+        super().__init__(model)
 
     @property
     def path(self) -> str:
@@ -39,13 +28,7 @@ class LVVolume(LVEntity[lv.virStorageVol, VolumeModel], Resource):
     @override
     def create(self) -> None:
         assert self.value is None
-        pool = self.conn.storagePoolLookupByName(self.pool)
-        if self.source is None:
-            self.value = pool.createXML(self.xml())
-            return
-
-        assert self.source.value is not None
-        self.value = pool.createXMLFrom(self.xml(), self.source.value)
+        self.value = self.pool().createXML(self.xml())
 
     @override
     def destroy(self) -> None:
@@ -55,22 +38,23 @@ class LVVolume(LVEntity[lv.virStorageVol, VolumeModel], Resource):
 
     @override
     def lookup(self) -> lv.virStorageVol:
-        pool = self.conn.storagePoolLookupByName(self.pool)
-        return pool.storageVolLookupByName(self.model.get_name())
+        return self.pool().storageVolLookupByName(self.model.get_name())
 
-    # Its changes, committed to a new (not yet created) volume: a standalone copy of its contents (what's backing it,
-    # with its own changes on top), e.g. to keep what a machine wrote to it, or to back new ones.
-    def commit(self, model: VolumeModel) -> LVVolume:
-        return LVVolume(model, self.pool, self)
+    # Its changes, into what's backing it (under any other volumes it backs too), or else into a new image at `target`.
+    def commit(self, target: str | Path | None = None) -> None:
+        assert self.value is not None
+        # The pool's files may only be accessible to libvirt, so it hands over the volume.
+        with tempfile.NamedTemporaryFile() as file:
+            stream = LVStream(self.conn)
+            self.value.download(stream.stream, 0, 0)
+            shutil.copyfileobj(stream.file(DOWNLOAD_TIMEOUT), file)
+            stream.close()
+            file.flush()
+            if target is None:
+                command = ["qemu-img", "commit", "-q", file.name]
+            else:
+                command = ["qemu-img", "convert", "-O", "qcow2", file.name, str(target)]
+            subprocess.run(command, check=True)
 
-    @override
-    def serialize(self) -> LVVolumeState:
-        return {**super().serialize(), "pool": self.pool}
-
-    @classmethod
-    @override
-    def restore(cls, state: LVEntityState[VolumeModel]) -> Self:
-        volume = cast(LVVolumeState, state)
-        result = cls(volume["model"], volume["pool"])
-        result.reconnect(volume["uri"])
-        return result
+    def pool(self) -> lv.virStoragePool:
+        return self.conn.storagePoolLookupByName(self.model.get_pool())

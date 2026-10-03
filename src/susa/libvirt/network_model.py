@@ -8,12 +8,10 @@ from typing_extensions import Self
 from susa.libvirt.interface_model import InterfaceModel
 from susa.libvirt.model import Model
 from susa.utilities.generic import random_id
-from susa.utilities.networking import reserve_subnet
+from susa.utilities.networking import free_subnet
 
 
 class NetworkModel(Model[lvnetwork.network]):
-    xml_model_type = lvnetwork.network
-
     def __init__(
         self, name: str | None = None, xml_model: lvnetwork.network | None = None
     ) -> None:
@@ -26,7 +24,6 @@ class NetworkModel(Model[lvnetwork.network]):
 
         return self
 
-    # Without an address, the first one of a free subnet (reserved for this process, see `reserve_subnet`).
     def ip(
         self,
         address: str | None = None,
@@ -34,11 +31,9 @@ class NetworkModel(Model[lvnetwork.network]):
         dhcp: bool = True,
     ) -> Self:
         if address is None:
-            prefix = ipaddress.IPv4Network(f"0.0.0.0/{netmask}").prefixlen
-            address = str(next(reserve_subnet(prefix).hosts()))
+            address = str(next(free_subnet().hosts()))
 
         ip = lvnetwork.ip(address=address, netmask=netmask)
-
         if dhcp:
             # Every host address but the network's own.
             network = ipaddress.IPv4Network(f"{address}/{netmask}", strict=False)
@@ -54,15 +49,13 @@ class NetworkModel(Model[lvnetwork.network]):
                     if start <= end
                 ]
             )
-
-        self.xml_model.ip_list = [*(self.xml_model.ip_list or []), ip]
+        self.xml_model.ip_list = [ip]
 
         # Guests can resolve the host's address (which e.g. some rlogin servers require of clients).
         host = lvnetwork.dns_host(
             ip=address, hostname_list=[lvnetwork.hostname(value="host")]
         )
-        dns = self.xml_model.dns = self.xml_model.dns or lvnetwork.dns()
-        dns.host_list = [*(dns.host_list or []), host]
+        self.xml_model.dns = lvnetwork.dns(host_list=[host])
 
         return self
 
@@ -80,32 +73,23 @@ class NetworkModel(Model[lvnetwork.network]):
 
         hosts = dhcp.host_list = dhcp.host_list or []
         if ip is None:
-            used = {host.ip for host in hosts}
-            free = (
-                str(address)
-                for r in dhcp.range_list or []
-                for block in ipaddress.summarize_address_range(
-                    ipaddress.IPv4Address(r.start), ipaddress.IPv4Address(r.end)
-                )
-                for address in block
-                if str(address) not in used
+            [own] = self.xml_model.ip_list or []
+            used = {own.address, *(host.ip for host in hosts)}
+            network = ipaddress.IPv4Network(
+                f"{own.address}/{own.netmask}", strict=False
             )
-            ip = next(free, None)
+            ip = next((str(a) for a in network.hosts() if str(a) not in used), None)
             if ip is None:
                 raise RuntimeError(f"There's no free IP left in {self.get_name()}")
         hosts.append(lvnetwork.dhcp_host(mac=interface.get_mac(), ip=ip))
 
         return self
 
-    def default_bridge(self) -> Self:
-        self.xml_model.bridge = lvnetwork.bridge(
-            name=self.get_name(), stp="off", delay=0
-        )
+    # A bridge (which libvirt names) without the spanning tree protocol's delays.
+    def default(self) -> Self:
+        self.xml_model.bridge = lvnetwork.bridge(stp="off")
 
         return self
-
-    def default(self) -> Self:
-        return self.default_bridge()
 
     def get_name(self) -> str:
         return self.xml_model.name.value
@@ -113,16 +97,6 @@ class NetworkModel(Model[lvnetwork.network]):
     def get_dhcp(self) -> lvnetwork.dhcp | None:
         return self.xml_model.ip_list[0].dhcp if self.xml_model.ip_list else None
 
-    def get_hosts(self) -> dict[str, str]:
+    def get_hosts(self) -> list[lvnetwork.dhcp_host] | None:
         dhcp = self.get_dhcp()
-        hosts = dhcp.host_list or [] if dhcp is not None else []
-        return {host.mac: host.ip for host in hosts if host.mac is not None}
-
-    def get_ip(self, mac: str) -> str | None:
-        return self.get_hosts().get(mac)
-
-    def get_bridge(self) -> str:
-        assert (
-            self.xml_model.bridge is not None and self.xml_model.bridge.name is not None
-        )
-        return self.xml_model.bridge.name
+        return None if dhcp is None else dhcp.host_list

@@ -10,8 +10,6 @@ QEMU_MAC_PREFIX = "52:54:00"
 
 
 class InterfaceModel(Model[lvdomain.devices_interface]):
-    xml_model_type = lvdomain.devices_interface
-
     def __init__(
         self,
         mac: str | None = None,

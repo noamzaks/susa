@@ -4,7 +4,6 @@
     <type arch="x86_64" machine="q35">hvm</type>
   </os>
   <features>
-    <apic />
     <acpi />
   </features>
   <devices>
@@ -13,7 +12,6 @@
       <driver name="qemu" type="qcow2" />
       <target dev="sda" bus="sata" />
     </disk>
-    <controller index="0" type="pci" model="pcie-root" />
     <controller index="0" type="usb" />
     <input type="tablet" bus="usb" />
     <input type="keyboard" bus="usb" />
@@ -21,8 +19,6 @@
     <video>
       <model type="virtio" />
     </video>
-    <console type="pty">
-      <target type="serial" />
-    </console>
+    <console type="pty" />
   </devices>
 </domain>

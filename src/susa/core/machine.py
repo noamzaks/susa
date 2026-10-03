@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import contextlib
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cached_property
 from io import BytesIO
 from typing import TYPE_CHECKING
+
+from typing_extensions import override
 
 from susa.core.interface import Interface
 from susa.core.resource import Resource
@@ -33,7 +37,7 @@ class Machine(Resource):
     @property
     def ip(self) -> str:
         ips = self.ips
-        assert len(ips) != 0
+        assert ips
         return ips[0]
 
 
@@ -45,6 +49,35 @@ class Snapshot(Resource):
 class Snapshottable(ABC):
     @abstractmethod
     def snapshot(self) -> Snapshot: ...
+
+
+class SnapshotGroup(Snapshot):
+    def __init__(self, snapshots: Sequence[Snapshot]) -> None:
+        self.snapshots = snapshots
+
+    @override
+    def create(self) -> None:
+        for snapshot in self.snapshots:
+            snapshot.create()
+
+    @override
+    def destroy(self) -> None:
+        for snapshot in reversed(self.snapshots):
+            snapshot.destroy()
+
+    @override
+    def revert(self) -> None:
+        for snapshot in self.snapshots:
+            snapshot.revert()
+
+
+class SnapshottableGroup(Snapshottable):
+    def __init__(self, snapshottables: Sequence[Snapshottable]) -> None:
+        self.snapshottables = snapshottables
+
+    @override
+    def snapshot(self) -> SnapshotGroup:
+        return SnapshotGroup([s.snapshot() for s in self.snapshottables])
 
 
 class Powerable(ABC):
@@ -111,7 +144,8 @@ def wait_until_booted(
         try:
             wait_until_ping(machine.ip, timeout)
             console.wait_until_quiet(quiet_time, timeout)
-        except TimeoutError as e:
-            console.read()
+        except (TimeoutError, EOFError) as e:
+            with contextlib.suppress(EOFError):
+                console.read()
             output = console.data.decode(errors="backslashreplace")
             raise TimeoutError(f"{machine.name} didn't boot: {e}\n{output}") from e

@@ -15,10 +15,7 @@ class ProcessStream(InputOutputStream):
     @override
     def read(self, size: int | None = None, timeout: float = 0) -> bytes:
         try:
-            data: bytes = self.process.read_nonblocking(
-                size or self.process.maxread, timeout
-            )
-            return data
+            return self.process.read_nonblocking(size or self.process.maxread, timeout)
         except pexpect.TIMEOUT:
             return b""
         except pexpect.EOF:

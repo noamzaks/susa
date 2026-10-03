@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import functools
 import ipaddress
 import json
 import os
@@ -15,8 +16,10 @@ from susa.utilities.generic import wait_until
 
 PING_REPLY_PATTERN = re.compile(r"icmp_seq=(\d+)\b.*?\btime=([\d.]+) ms")
 SUBNETS = ipaddress.IPv4Network("10.0.0.0/8")
-# A file per reserved subnet, holding the reserving process' ID.
-RESERVATIONS = Path(tempfile.gettempdir()) / "susa-subnets"
+# A byte per subnet, locked by the process that took it.
+LOCK = Path(tempfile.gettempdir()) / "susa-subnets.lock"
+# The subnets this process took (its own locks don't stop it).
+TAKEN: set[ipaddress.IPv4Network] = set()
 
 
 @overload
@@ -24,7 +27,7 @@ def ping(  # type: ignore
     host: str,
     count: Literal[1] = 1,
     timeout: float | None = 1,
-    interval: int | None = None,
+    interval: float | None = None,
 ) -> float | None: ...
 
 
@@ -33,12 +36,12 @@ def ping(
     host: str,
     count: int,
     timeout: float | None = 1,
-    interval: int | None = None,
+    interval: float | None = None,
 ) -> list[float | None]: ...
 
 
 def ping(
-    host: str, count: int = 1, timeout: float | None = 1, interval: int | None = None
+    host: str, count: int = 1, timeout: float | None = 1, interval: float | None = None
 ) -> list[float | None] | float | None:
     command = ["ping", "-n", "-c", str(count)]
     if interval is not None:
@@ -73,8 +76,8 @@ def ping(
     return times[0] if count == 1 else times
 
 
-def wait_until_ping(host: str, timeout: float) -> float:
-    return wait_until(
+def wait_until_ping(host: str, timeout: float) -> None:
+    wait_until(
         test=lambda timeout: ping(host, timeout=min(2, timeout)) is not None,
         timeout=timeout,
     )
@@ -86,58 +89,35 @@ def random_mac(prefix: str | None = None) -> str:
     return ":".join(parts)
 
 
-# A subnet that's free (overlapping none of the host's routes, e.g. its networks), reserved for this process (until it
-# exits), so other processes (each holding the lock while reserving) don't reserve it too.
-def reserve_subnet(prefix: int = 24) -> ipaddress.IPv4Network:
-    RESERVATIONS.mkdir(exist_ok=True)
-    with open(RESERVATIONS / "lock", "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        used = host_subnets() + reserved_subnets()
-        subnet = next(
-            subnet
-            for subnet in SUBNETS.subnets(new_prefix=prefix)
-            if not any(subnet.overlaps(other) for other in used)
-        )
-        reservation(subnet).write_text(str(os.getpid()))
-    return subnet
+# The first /24 overlapping none of the host's routes (e.g. its networks) that no process took. It's taken (its byte of
+# `LOCK` stays locked) until this process exits.
+def free_subnet() -> ipaddress.IPv4Network:
+    used = host_subnets()
+    lock = lock_file()
+    for index, subnet in enumerate(SUBNETS.subnets(new_prefix=24)):
+        if subnet in TAKEN or any(subnet.overlaps(other) for other in used):
+            continue
+        try:
+            fcntl.lockf(lock, fcntl.LOCK_EX | fcntl.LOCK_NB, 1, index)
+        except OSError:
+            continue
+        TAKEN.add(subnet)
+        return subnet
+    raise RuntimeError(f"There's no free subnet left in {SUBNETS}")
+
+
+# Open while this process runs, as closing any of its descriptors releases the process' locks.
+@functools.cache
+def lock_file() -> int:
+    return os.open(LOCK, os.O_CREAT | os.O_RDWR)
 
 
 def host_subnets() -> list[ipaddress.IPv4Network]:
     routes = json.loads(
-        subprocess.run(
-            ["ip", "-json", "-4", "route", "show", "table", "all"],
-            capture_output=True,
-            check=True,
-        ).stdout
+        subprocess.check_output(["ip", "-json", "-4", "route", "show", "table", "all"])
     )
     return [
         ipaddress.IPv4Network(route["dst"], strict=False)
         for route in routes
         if route["dst"] != "default"
     ]
-
-
-# Reservations of processes that exited are removed.
-def reserved_subnets() -> list[ipaddress.IPv4Network]:
-    result = []
-    for path in RESERVATIONS.glob("*_*"):
-        if alive(int(path.read_text())):
-            result.append(ipaddress.IPv4Network(path.name.replace("_", "/")))
-        else:
-            path.unlink()
-    return result
-
-
-def reservation(subnet: ipaddress.IPv4Network) -> Path:
-    return RESERVATIONS / str(subnet).replace("/", "_")
-
-
-def alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        # Another user's.
-        pass
-    return True

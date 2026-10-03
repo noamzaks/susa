@@ -3,6 +3,7 @@
   <os>
     <type arch="mips" machine="malta">hvm</type>
   </os>
+  <features />
   <devices>
     <disk device="disk" type="file">
       <source file="/fake/cwd/somewhere" />
@@ -18,8 +19,6 @@
     <video>
       <model type="cirrus" />
     </video>
-    <console type="pty">
-      <target type="serial" />
-    </console>
+    <console type="pty" />
   </devices>
 </domain>

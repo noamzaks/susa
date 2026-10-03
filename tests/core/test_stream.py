@@ -30,7 +30,7 @@ def test_read_until_timeout() -> None:
 
 
 class SlowStream(OutputStream):
-    """Data every `interval` seconds, forever."""
+    # Data every `interval` seconds, forever.
 
     def __init__(self, interval: float) -> None:
         self.interval = interval

@@ -1,13 +1,9 @@
 from __future__ import annotations
 
-import json
-import pickle
 import platform
 import re
 from pathlib import Path
-from typing import Any
 
-import pydantic
 import pytest
 from pytest_snapshot.plugin import Snapshot
 
@@ -19,6 +15,10 @@ from susa.libvirt.network_model import NetworkModel
 from susa.utilities.generic import GIGA
 
 MAC = "52:54:00:12:34:56"
+
+
+def hosts(network: NetworkModel) -> dict[str | None, str]:
+    return {host.mac: host.ip for host in network.get_hosts() or []}
 
 
 # Keep the XML independent of the machine the tests run on.
@@ -35,13 +35,6 @@ def fake_resolve(monkeypatch: pytest.MonkeyPatch) -> None:
         return self if self.is_absolute() else fake_cwd / self
 
     monkeypatch.setattr(Path, "resolve", resolve)
-
-
-def dhcp_hosts(network: NetworkModel) -> list[tuple[str | None, str]]:
-    assert network.xml_model.ip_list is not None
-    dhcp = network.xml_model.ip_list[0].dhcp
-    assert dhcp is not None and dhcp.host_list is not None
-    return [(host.mac, host.ip) for host in dhcp.host_list]
 
 
 def test_machine_model_empty(snapshot: Snapshot) -> None:
@@ -119,24 +112,16 @@ def test_machine_model_full(snapshot: Snapshot) -> None:
         .kernel("vmlinux", "initrd.gz", "console=ttyS0 root=/dev/sda1")
         .interface(interface)
         .disk(disk)
-        .disk(DiskModel(xml_model=disk.xml_model.model_copy()))
+        .disk(disk)
         .build()
     )
     snapshot.assert_match(xml, "domain.xml")
 
 
-def test_interface_model_mac() -> None:
-    interface = InterfaceModel(mac=MAC)
-    assert interface.xml_model.mac is not None
-    assert interface.xml_model.mac.address == MAC
-
-
 def test_interface_model_random_mac() -> None:
     macs = set()
     for _ in range(10):
-        interface = InterfaceModel()
-        assert interface.xml_model.mac is not None
-        mac = interface.xml_model.mac.address
+        mac = InterfaceModel().get_mac()
         assert re.fullmatch(r"52:54:00(:[0-9a-f]{2}){3}", mac)
         macs.add(mac)
     # 10 random 24-bit suffixes colliding is (practically) impossible.
@@ -145,17 +130,15 @@ def test_interface_model_random_mac() -> None:
 
 def test_interface_model_parse_keeps_mac() -> None:
     xml = InterfaceModel(mac=MAC).model("e1000").build()
-    interface = InterfaceModel.parse(xml)
-    assert interface.xml_model.mac is not None
-    assert interface.xml_model.mac.address == MAC
+    assert InterfaceModel.parse(xml).get_mac() == MAC
 
 
 @pytest.mark.parametrize("arch", ARCH_DEFAULTS)
 def test_machine_model_interface_default_nic(arch: str) -> None:
     machine = MachineModel("test").arch(arch).interface(InterfaceModel(mac=MAC))
-    [interface] = machine.get_interfaces()
-    assert interface.xml_model.model is not None
-    assert interface.xml_model.model.type == ARCH_DEFAULTS[arch].nic
+    [interface] = machine.get_interfaces() or []
+    assert interface.model is not None
+    assert interface.model.type == ARCH_DEFAULTS[arch].nic
 
 
 def test_network_model_interface_without_ip(snapshot: Snapshot) -> None:
@@ -179,7 +162,7 @@ def test_network_model_interface_with_ip(snapshot: Snapshot) -> None:
     assert network.interface(interface, "10.0.0.10") is network
     assert interface.xml_model.source is not None
     assert interface.xml_model.source.network == "test"
-    assert dhcp_hosts(network) == [(MAC, "10.0.0.10")]
+    assert hosts(network) == {MAC: "10.0.0.10"}
     snapshot.assert_match(network.build(), "network.xml")
 
 
@@ -189,26 +172,26 @@ def test_network_model_interface_picks_free_ips() -> None:
     network.interface(InterfaceModel(mac="52:54:00:00:00:02"))
     network.interface(InterfaceModel(mac="52:54:00:00:00:03"))
     network.interface(InterfaceModel(mac="52:54:00:00:00:04"))
-    assert dhcp_hosts(network) == [
-        ("52:54:00:00:00:01", "10.0.0.3"),
+    assert hosts(network) == {
+        "52:54:00:00:00:01": "10.0.0.3",
         # The gateway (10.0.0.1) isn't in the DHCP range, and 10.0.0.3 is taken.
-        ("52:54:00:00:00:02", "10.0.0.2"),
-        ("52:54:00:00:00:03", "10.0.0.4"),
-        ("52:54:00:00:00:04", "10.0.0.5"),
-    ]
+        "52:54:00:00:00:02": "10.0.0.2",
+        "52:54:00:00:00:03": "10.0.0.4",
+        "52:54:00:00:00:04": "10.0.0.5",
+    }
 
 
 def test_network_model_interface_picks_ip_below_gateway() -> None:
     network = NetworkModel("test").default().ip("10.0.0.254")
     network.interface(InterfaceModel(mac=MAC))
-    assert dhcp_hosts(network) == [(MAC, "10.0.0.1")]
+    assert hosts(network) == {MAC: "10.0.0.1"}
 
 
 def test_network_model_interface_no_free_ip() -> None:
     # A /30 has only 2 hosts, one of which is the gateway.
     network = NetworkModel("test").default().ip("10.0.0.1", "255.255.255.252")
     network.interface(InterfaceModel(mac="52:54:00:00:00:01"))
-    assert dhcp_hosts(network) == [("52:54:00:00:00:01", "10.0.0.2")]
+    assert hosts(network) == {"52:54:00:00:00:01": "10.0.0.2"}
     with pytest.raises(RuntimeError):
         network.interface(InterfaceModel(mac="52:54:00:00:00:02"))
 
@@ -232,24 +215,24 @@ def test_interface_model_getters() -> None:
     assert interface.get_mac() == MAC
     assert interface.get_network() is None
 
-    NetworkModel("test").interface(interface)
+    assert interface.network("test") is interface
     assert interface.get_network() == "test"
 
 
 def test_network_model_getters() -> None:
     network = NetworkModel("test")
     assert network.get_name() == "test"
-    assert network.get_hosts() == {}
-    assert network.get_ip(MAC) is None
+    assert hosts(network) == {}
+    assert hosts(network).get(MAC) is None
 
     network.ip("10.0.0.1")
-    assert network.get_hosts() == {}
+    assert hosts(network) == {}
 
     network.interface(InterfaceModel(mac=MAC), "10.0.0.10")
     network.interface(InterfaceModel(mac="52:54:00:00:00:01"))
-    assert network.get_hosts() == {MAC: "10.0.0.10", "52:54:00:00:00:01": "10.0.0.2"}
-    assert network.get_ip(MAC) == "10.0.0.10"
-    assert network.get_ip("52:54:00:00:00:02") is None
+    assert hosts(network) == {MAC: "10.0.0.10", "52:54:00:00:00:01": "10.0.0.2"}
+    assert hosts(network).get(MAC) == "10.0.0.10"
+    assert hosts(network).get("52:54:00:00:00:02") is None
 
 
 def test_network_model_getters_after_parse() -> None:
@@ -257,7 +240,7 @@ def test_network_model_getters_after_parse() -> None:
     network.interface(InterfaceModel(mac=MAC), "10.0.0.10")
     parsed = NetworkModel.parse(network.build())
     assert parsed.get_name() == "test"
-    assert parsed.get_ip(MAC) == "10.0.0.10"
+    assert hosts(parsed).get(MAC) == "10.0.0.10"
 
 
 def test_machine_model_getters() -> None:
@@ -269,7 +252,7 @@ def test_machine_model_getters() -> None:
     domain.interface(InterfaceModel(mac=MAC)).interface(
         InterfaceModel(mac="52:54:00:00:00:01")
     )
-    assert [i.get_mac() for i in domain.get_interfaces()] == [
+    assert [i.mac.address for i in domain.get_interfaces() or [] if i.mac] == [
         MAC,
         "52:54:00:00:00:01",
     ]
@@ -284,100 +267,7 @@ def test_snapshot_model_getters() -> None:
     assert SnapshotModel("test").get_name() == "test"
 
 
-def test_interface_model_network() -> None:
-    interface = InterfaceModel(mac=MAC)
-    assert interface.network("test") is interface
-    assert interface.get_network() == "test"
-
-
-def test_machine_model_from_recipe() -> None:
-    machine = pydantic.TypeAdapter(MachineModel).validate_python(
-        [
-            {"name": "test"},
-            {"arch": "x86_64"},
-            "default",
-            {"memory": 4 * GIGA},
-            {"cpu": 2},
-            {"efi": {"secure_boot": True}},
-            {"kernel": {"kernel": "vmlinux", "cmdline": "console=ttyS0"}},
-            {"disk": [{"source": "somewhere"}]},
-            {"interface": [{"mac": MAC}, {"network": "test"}]},
-            {"qemu_args": ["-cpu", "max"]},
-        ]
-    )
-    expected = (
-        MachineModel("test")
-        .arch("x86_64")
-        .default()
-        .memory(4 * GIGA)
-        .cpu(2)
-        .efi(secure_boot=True)
-        .kernel("vmlinux", cmdline="console=ttyS0")
-        .disk(DiskModel().source("somewhere"))
-        .interface(InterfaceModel(mac=MAC).network("test"))
-        .qemu_args("-cpu", "max")
-    )
-    assert machine.build() == expected.build()
-
-
-def test_network_model_from_recipe() -> None:
-    network = pydantic.TypeAdapter(NetworkModel).validate_python(
-        [
-            {"name": "test"},
-            "default",
-            {"ip": {"address": "10.0.0.1", "netmask": "255.255.0.0"}},
-            {"interface": {"interface": [{"mac": MAC}], "ip": "10.0.0.10"}},
-            "nat",
-        ]
-    )
-    expected = (
-        NetworkModel("test")
-        .default()
-        .ip("10.0.0.1", "255.255.0.0")
-        .interface(InterfaceModel(mac=MAC), "10.0.0.10")
-        .nat()
-    )
-    assert network.build() == expected.build()
-
-
-@pytest.mark.parametrize(
-    "recipe",
-    (
-        ["unknown"],
-        [{"arch": "x86_64", "cpu": 2}],
-        [{"efi": {"loader": "loader"}}],
-        [{"efi": {"secure_boot": "maybe"}}],
-        [{"memory": "a lot"}],
-        ["arch"],
-    ),
-)
-def test_machine_model_from_invalid_recipe(recipe: list[Any]) -> None:
-    with pytest.raises(pydantic.ValidationError):
-        pydantic.TypeAdapter(MachineModel).validate_python(recipe)
-
-
-def test_model_json_schema() -> None:
-    schema = json.dumps(pydantic.TypeAdapter(MachineModel).json_schema())
-    for method in ("arch", "default", "efi", "disk", "qemu_args", "source", "mac"):
-        assert f'"{method}"' in schema
-
-
-def test_model_pickle() -> None:
-    machine = MachineModel("test").arch("x86_64").default().qemu_args("-cpu", "max")
-    restored = pickle.loads(pickle.dumps(machine))
-    assert isinstance(restored, MachineModel)
-    assert restored.build() == machine.build()
-
-
-def test_model_json() -> None:
-    adapter = pydantic.TypeAdapter(MachineModel)
-    machine = MachineModel("test").arch("x86_64").default()
-    assert adapter.validate_python(machine) is machine
-    assert adapter.dump_python(machine) == machine.build()
-    assert adapter.validate_json(adapter.dump_json(machine)).build() == machine.build()
-
-
 @pytest.mark.parametrize("arch", ARCH_DEFAULTS)
 def test_machine_model_parse(arch: str) -> None:
-    xml = MachineModel("test").arch(arch).default().qemu_args("-cpu", "max").build()
+    xml = MachineModel("test").arch(arch).default().qemu_args(["-cpu", "max"]).build()
     assert MachineModel.parse(xml).build() == xml

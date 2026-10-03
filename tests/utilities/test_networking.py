@@ -1,18 +1,19 @@
 from __future__ import annotations
 
-import ipaddress
 import multiprocessing
-import os
 import re
 import subprocess
-import time
 from concurrent.futures import ProcessPoolExecutor
-from pathlib import Path
 
 import pytest
 
-from susa.utilities import networking
-from susa.utilities.networking import ping, random_mac
+from susa.utilities.networking import (
+    SUBNETS,
+    free_subnet,
+    host_subnets,
+    ping,
+    random_mac,
+)
 
 
 def test_ping() -> None:
@@ -47,33 +48,13 @@ def test_random_mac_full_prefix() -> None:
     assert random_mac("52:54:00:12:34:56") == "52:54:00:12:34:56"
 
 
-@pytest.fixture
-def reservations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setattr(networking, "RESERVATIONS", tmp_path)
-    return tmp_path
-
-
-def reserve(_: int) -> ipaddress.IPv4Network:
-    subnet = networking.reserve_subnet()
-    # Still alive (holding it) while the others reserve.
-    time.sleep(1)
-    return subnet
-
-
-def test_reserve_subnet_in_parallel(reservations: Path) -> None:
-    with ProcessPoolExecutor(4, multiprocessing.get_context("fork")) as pool:
-        subnets = list(pool.map(reserve, range(4)))
-    assert len(set(subnets)) == 4
-    host = networking.host_subnets()
-    assert not any(s.overlaps(h) for s in subnets for h in host)
-
-
-def test_reserved_subnets_of_exited_processes(reservations: Path) -> None:
-    exited = subprocess.Popen(["true"])
-    exited.wait()
-    freed = ipaddress.IPv4Network("10.1.2.0/24")
-    held = ipaddress.IPv4Network("10.1.3.0/24")
-    networking.reservation(freed).write_text(str(exited.pid))
-    networking.reservation(held).write_text(str(os.getpid()))
-    assert networking.reserved_subnets() == [held]
-    assert not networking.reservation(freed).exists()
+def test_free_subnet() -> None:
+    subnet = free_subnet()
+    assert subnet.prefixlen == 24 and subnet.subnet_of(SUBNETS)
+    assert not any(subnet.overlaps(other) for other in host_subnets())
+    # Taken by this process.
+    assert free_subnet() != subnet
+    # And by others, in parallel.
+    with ProcessPoolExecutor(4, multiprocessing.get_context("spawn")) as pool:
+        subnets = {subnet, *(pool.submit(free_subnet).result() for _ in range(4))}
+    assert len(subnets) == 5

@@ -12,16 +12,13 @@
       <driver name="qemu" type="qcow2" />
       <target dev="vda" bus="virtio" />
     </disk>
-    <controller index="0" type="pci" model="pcie-root" />
-    <controller index="0" type="usb" model="qemu-xhci" />
+    <controller index="0" type="usb" />
     <input type="tablet" bus="usb" />
     <input type="keyboard" bus="usb" />
     <graphics type="vnc" port="-1" />
     <video>
       <model type="virtio" />
     </video>
-    <console type="pty">
-      <target type="serial" />
-    </console>
+    <console type="pty" />
   </devices>
 </domain>

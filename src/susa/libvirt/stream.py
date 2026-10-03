@@ -8,36 +8,31 @@ from typing_extensions import override
 from susa.core.stream import InputOutputStream
 
 POLL_INTERVAL = 0.05
-# How much to ask for at a time when reading everything available.
 CHUNK_SIZE = 1 << 16
 
 
+# A non-blocking libvirt stream, polled.
 class LVStream(InputOutputStream):
     def __init__(self, conn: lv.virConnect) -> None:
         self.stream = conn.newStream(lv.VIR_STREAM_NONBLOCK)
+        # libvirt fails reads after the end.
         self.eof = False
 
     @override
     def read(self, size: int | None = None, timeout: float = 0) -> bytes:
-        deadline = time.time() + timeout
-        result = b""
-        while not self.eof and (size is None or len(result) < size):
-            # Returns -2 (despite its annotation) when there's no data right now.
-            data: bytes | int = self.stream.recv(
-                CHUNK_SIZE if size is None else size - len(result)
-            )
-            if isinstance(data, int):
-                remaining = deadline - time.time()
-                if result or remaining <= 0:
-                    break
-                time.sleep(min(POLL_INTERVAL, remaining))
-                continue
-            if not data:
-                self.eof = True
-            result += data
-        if self.eof and not result:
-            raise EOFError
-        return result
+        deadline = time.monotonic() + timeout
+        while not self.eof:
+            # -2 (despite its annotation) when there's nothing to read yet.
+            data: bytes | int = self.stream.recv(size or CHUNK_SIZE)
+            if isinstance(data, bytes):
+                self.eof = not data
+                if data:
+                    return data
+            elif time.monotonic() >= deadline:
+                return b""
+            else:
+                time.sleep(POLL_INTERVAL)
+        raise EOFError
 
     @override
     def write(self, data: bytes) -> None:
@@ -51,6 +46,3 @@ class LVStream(InputOutputStream):
     @override
     def close(self) -> None:
         self.stream.finish()
-
-    def abort(self) -> None:
-        self.stream.abort()

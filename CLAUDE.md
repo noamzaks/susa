@@ -22,6 +22,9 @@ around libvirt/QEMU virtual machines of many architectures.
   Conveniences are opt-in, generic and composable (e.g. `Session`); nothing imposes a layout or an orchestration.
 - **Let the libraries do it.** Prefer what libvirt (or another library) already provides. SUSA doesn't implement what
   no library does, and doesn't reach behind its backend's back.
+- **Plain and simple.** Each function does one simple thing. Use libraries through their high-level APIs (e.g. pydantic
+  models, not core schemas). No machinery nothing needs (e.g. serialization, cross-process coordination, sharing a
+  resource between concurrent users).
 - **Capabilities are mixins** (`Snapshottable`, `Powerable`, ...), checked with `isinstance`.
 - **Contracts stay loose.** Core types are ABCs with abstract properties; don't collapse them into concrete classes.
 - **Resources.** Anything with a lifetime is a `Resource` (`create()`/`destroy()`, a context manager). Factory methods

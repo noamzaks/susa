@@ -11,8 +11,6 @@ from susa.libvirt.volume_model import VolumeModel
 
 
 class DiskModel(Model[lvdomain.disk]):
-    xml_model_type = lvdomain.disk
-
     def __init__(self, xml_model: lvdomain.disk | None = None) -> None:
         self.xml_model = xml_model or lvdomain.disk(
             type="file",
@@ -36,12 +34,11 @@ class DiskModel(Model[lvdomain.disk]):
 
         return self
 
-    # A volume (in a storage pool), e.g. an overlay of a base image.
-    def volume(self, volume: VolumeModel, pool: str = "default") -> Self:
+    def volume(self, volume: VolumeModel) -> Self:
         self.xml_model.type = "volume"
         self.xml_model.driver = lvdomain.disk_driver(name="qemu", type="qcow2")
         self.xml_model.source = lvdomain.devices_disk_source(
-            pool=pool, volume=volume.get_name()
+            pool=volume.get_pool(), volume=volume.get_name()
         )
 
         return self

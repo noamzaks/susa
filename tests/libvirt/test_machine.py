@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import random
 import shutil
+import subprocess
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +14,7 @@ from scapy.layers.inet import ICMP, IP
 
 from susa.communicator.shell import ShellCommunicator
 from susa.core.machine import wait_until_booted
+from susa.core.session import Session
 from susa.libvirt import (
     Connection,
     LVMachine,
@@ -20,12 +23,17 @@ from susa.libvirt import (
     LVVolume,
     VolumeModel,
 )
-from susa.recipes import make
-from susa.session import Session
+from susa.recipes import Recipe
 from susa.utilities.generic import GIGA, wait_until
-from susa.utilities.networking import ping, wait_until_ping
+from susa.utilities.networking import ping
 
 MACHINES = Path("/machines")
+MACHINE_MODEL = "susa.libvirt.machine_model.MachineModel"
+NETWORK_MODEL = "susa.libvirt.network_model.NetworkModel"
+VOLUME_MODEL = "susa.libvirt.volume_model.VolumeModel"
+LV_NETWORK = "susa.libvirt.network.LVNetwork"
+LV_VOLUME = "susa.libvirt.volume.LVVolume"
+LV_MACHINE = "susa.libvirt.machine.LVMachine"
 BOOT_TIMEOUT = 120
 QUIET_TIME = 5
 
@@ -42,23 +50,16 @@ class Image:
             *self.steps,
             "default",
             {"memory": 2 * GIGA},
-            {"volume": {"$ref": "volume.model"}},
-            {"network": {"$ref": "network.model"}},
+            {"volume": {"$ref": "volume_model"}},
+            {"network": {"$ref": "network_model"}},
         ]
         return [
-            {
-                "network": {
-                    "susa.libvirt.network.LVNetwork": {"model": ["default", "ip"]}
-                }
-            },
-            {
-                "volume": {
-                    "susa.libvirt.volume.LVVolume": {
-                        "model": [{"backing": str(path or self.path)}]
-                    }
-                }
-            },
-            {"machine": {"susa.libvirt.machine.LVMachine": {"model": machine}}},
+            {"network_model": {NETWORK_MODEL: ["default", "ip"]}},
+            {"volume_model": {VOLUME_MODEL: [{"backing": str(path or self.path)}]}},
+            {"machine_model": {MACHINE_MODEL: machine}},
+            {"network": {LV_NETWORK: {"model": {"$ref": "network_model"}}}},
+            {"volume": {LV_VOLUME: {"model": {"$ref": "volume_model"}}}},
+            {"machine": {LV_MACHINE: {"model": {"$ref": "machine_model"}}}},
         ]
 
 
@@ -131,7 +132,7 @@ IMAGES = {
 }
 
 # All of the images have sshd, telnet and rlogin servers, and `root` and `user` with the password `a`.
-LOGIN = {"machine": {"$ref": "machine"}, "username": "root", "password": "a"}
+LOGIN = {"host": {"$ref": "machine.ip"}, "username": "root", "password": "a"}
 COMMUNICATORS: dict[str, dict[str, Any]] = {
     "serial": {
         "susa.communicator.serial.SerialCommunicator": {
@@ -188,16 +189,10 @@ def name(request: pytest.FixtureRequest) -> str:
     return result
 
 
-# The machine as it was once it booted, with what its serial console says during the test in the report.
+# The machine as it was once it booted.
 @pytest.fixture
-def machine(
-    request: pytest.FixtureRequest, session: Session, ready: LVSnapshot
-) -> Iterator[LVMachine]:
-    machine = session.get("machine", LVMachine)
-    with machine.serial() as serial:
-        yield machine
-        output = serial.read_available().decode(errors="backslashreplace")
-        request.node.add_report_section("call", "serial", output)
+def machine(session: Session, ready: LVSnapshot) -> Iterator[LVMachine]:
+    yield session.get("machine", LVMachine)
     ready.revert()
 
 
@@ -237,7 +232,9 @@ def test_serial(machine: LVMachine) -> None:
 def communicator(machine: LVMachine, kind: str) -> ShellCommunicator:
     if shutil.which(CLIENTS.get(kind, "true")) is None:
         pytest.skip(f"There's no {CLIENTS[kind]} client")
-    result: ShellCommunicator = make(COMMUNICATORS[kind], machine=machine)
+    result: ShellCommunicator = Recipe.model_validate(COMMUNICATORS[kind]).make(
+        machine=machine
+    )
     return result
 
 
@@ -295,14 +292,16 @@ def test_transfer(machine: LVMachine, kind: str, tmp_path: Path) -> None:
         assert (tmp_path / f"down{i}").read_bytes() == content
 
 
-def test_power_cycle(machine: LVMachine) -> None:
+# Communicators connect (again) until the machine is up, so they need no waiting for it to boot.
+@pytest.mark.parametrize("kind", ("serial", "ssh"))
+def test_power_cycle(machine: LVMachine, kind: str) -> None:
     machine.power_off()
     assert not machine.is_powered_on
 
     machine.power_on()
     assert machine.is_powered_on
-    # Booting may take longer than usual while other machines run in parallel.
-    wait_until_ping(machine.ip, timeout=2 * BOOT_TIMEOUT)
+    with communicator(machine, kind) as c:
+        assert c.check("echo up") == b"up\n"
 
 
 def test_sniff(machine: LVMachine, network: LVNetwork) -> None:
@@ -316,9 +315,19 @@ def test_sniff(machine: LVMachine, network: LVNetwork) -> None:
     assert len(requests) == 3
 
 
+# A new image, where QEMU can read it.
+@pytest.fixture
+def committed() -> Iterator[Path]:
+    path = MACHINES / f"susa-committed-{os.getpid()}.qcow2"
+    yield path
+    path.unlink(missing_ok=True)
+
+
 # What's written to a machine's volume is kept by committing it, e.g. for another machine to boot from (tried on one,
 # small image).
-def test_commit(machine: LVMachine, volume: LVVolume, name: str) -> None:
+def test_commit(
+    machine: LVMachine, volume: LVVolume, name: str, committed: Path
+) -> None:
     if name != "freebsd10":
         pytest.skip("Committing is tried on freebsd10")
     with communicator(machine, "ssh") as c:
@@ -326,11 +335,32 @@ def test_commit(machine: LVMachine, volume: LVVolume, name: str) -> None:
     # Cleanly, so the file system is written out.
     machine.shutdown()
     wait_until(lambda _: not machine.is_powered_on, BOOT_TIMEOUT)
-    with (
-        volume.commit(VolumeModel()) as committed,
-        Session.parse(IMAGES[name].session(Path(committed.path))) as session,
-    ):
-        copy = session.get("machine", LVMachine)
-        boot(copy)
-        with communicator(copy, "ssh") as c:
-            assert c.check("cat /root/susa-commit") == b"committed\n"
+    volume.commit(committed)
+    recipe = [*IMAGES[name].session(committed), {"ssh": COMMUNICATORS["ssh"]}]
+    with Session.parse(recipe) as session:
+        ssh = session.get("ssh", ShellCommunicator)
+        assert ssh.check("cat /root/susa-commit") == b"committed\n"
+
+
+def qemu(*args: str | Path) -> None:
+    subprocess.run(args, check=True, capture_output=True)
+
+
+# Committing into the image backing a volume, which here is a small one of its own (others would see the change).
+def test_commit_into_backing(connection: None, tmp_path: Path) -> None:
+    image = tmp_path / "image.qcow2"
+    qemu("qemu-img", "create", "-f", "qcow2", image, "1M")
+    with LVVolume(VolumeModel().backing(image)) as volume:
+        # What a machine would have written to it.
+        written = tmp_path / "written.qcow2"
+        qemu("qemu-img", "create", "-f", "qcow2", "-b", image, "-F", "qcow2", written)
+        qemu("qemu-io", "-c", "write -P 0xab 0 4k", written)
+        assert volume.value is not None
+        stream = volume.conn.newStream()
+        volume.value.upload(stream, 0, 0)
+        with written.open("rb") as file:
+            stream.sendAll(lambda _, size, file: file.read(size), file)
+        stream.finish()
+
+        volume.commit()
+    qemu("qemu-io", "-c", "read -P 0xab 0 4k", image)

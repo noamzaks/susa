@@ -7,13 +7,11 @@
     <cmdline>console=ttyS0 root=/dev/sda1</cmdline>
     <firmware>
       <feature enabled="no" name="secure-boot" />
-      <feature enabled="no" name="enrolled-keys" />
     </firmware>
   </os>
   <memory unit="B">4294967296</memory>
   <vcpu>2</vcpu>
   <features>
-    <apic />
     <acpi />
   </features>
   <devices>
@@ -27,7 +25,6 @@
       <driver name="qemu" type="qcow2" />
       <target dev="sdb" bus="sata" />
     </disk>
-    <controller index="0" type="pci" model="pcie-root" />
     <controller index="0" type="usb" />
     <interface type="network">
       <source network="test" />
@@ -40,8 +37,6 @@
     <video>
       <model type="virtio" />
     </video>
-    <console type="pty">
-      <target type="serial" />
-    </console>
+    <console type="pty" />
   </devices>
 </domain>

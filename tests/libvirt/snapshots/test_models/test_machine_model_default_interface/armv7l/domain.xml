@@ -3,9 +3,9 @@
   <os>
     <type arch="armv7l" machine="virt">hvm</type>
   </os>
+  <features />
   <devices>
-    <controller index="0" type="pci" model="pcie-root" />
-    <controller index="0" type="usb" model="qemu-xhci" />
+    <controller index="0" type="usb" />
     <interface type="network">
       <source network="test" />
       <mac address="52:54:00:12:34:56" />
@@ -17,9 +17,7 @@
     <video>
       <model type="virtio" />
     </video>
-    <console type="pty">
-      <target type="serial" />
-    </console>
+    <console type="pty" />
   </devices>
   <qemu:commandline>
     <qemu:arg value="-machine" />

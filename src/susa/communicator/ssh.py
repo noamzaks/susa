@@ -9,8 +9,7 @@ from typing import Literal
 from typing_extensions import override
 
 from susa.communicator.process import ProcessStream
-from susa.communicator.shell import NetworkCommunicator
-from susa.core.machine import Machine
+from susa.communicator.shell import ShellCommunicator
 from susa.core.stream import InputOutputStream
 
 OPTIONS = [
@@ -21,17 +20,17 @@ OPTIONS = [
 TRANSFER_TIMEOUT = 300
 
 
-class SSHCommunicator(NetworkCommunicator):
+class SSHCommunicator(ShellCommunicator):
     def __init__(
         self,
-        machine: Machine | str,
+        host: str,
         username: str,
         password: str | None = None,
         port: int = 22,
         file_transfer: Literal["sftp", "scp", "shell"] = "sftp",
     ) -> None:
-        # The password comes from SSH_ASKPASS (see `create`).
-        super().__init__(machine)
+        super().__init__()
+        self.host = host
         self.username = username
         self.password = password
         self.port = port

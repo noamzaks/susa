@@ -1,6 +1,6 @@
 <network>
   <name>test</name>
-  <bridge name="test" stp="off" delay="0" />
+  <bridge stp="off" />
   <dns>
     <host ip="10.0.0.2">
       <hostname>host</hostname>

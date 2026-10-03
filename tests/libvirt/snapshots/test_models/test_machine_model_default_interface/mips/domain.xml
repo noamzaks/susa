@@ -3,6 +3,7 @@
   <os>
     <type arch="mips" machine="malta">hvm</type>
   </os>
+  <features />
   <devices>
     <controller index="0" type="usb">
       <address type="pci" domain="0" bus="0" slot="11" function="0" />
@@ -19,8 +20,6 @@
     <video>
       <model type="cirrus" />
     </video>
-    <console type="pty">
-      <target type="serial" />
-    </console>
+    <console type="pty" />
   </devices>
 </domain>

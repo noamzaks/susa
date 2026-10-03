@@ -3,20 +3,20 @@ from __future__ import annotations
 from typing_extensions import override
 
 from susa.communicator.process import ProcessStream
-from susa.communicator.shell import Login, NetworkCommunicator
-from susa.core.machine import Machine
+from susa.communicator.shell import Login, ShellCommunicator
 from susa.core.stream import InputOutputStream
 
 
-class RloginCommunicator(NetworkCommunicator):
+class RloginCommunicator(ShellCommunicator):
     def __init__(
         self,
-        machine: Machine | str,
+        host: str,
         username: str,
         password: str,
     ) -> None:
         # rlogind gets the username from the client, and asks only for the password.
-        super().__init__(machine, Login(password))
+        super().__init__(Login(password))
+        self.host = host
         self.username = username
 
     @override

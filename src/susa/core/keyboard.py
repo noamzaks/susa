@@ -5,10 +5,6 @@ from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from enum import Enum
 
-from typing_extensions import override
-
-from susa.core.stream import InputStream
-
 
 class Key(Enum):
     # Values are Linux input event codes.
@@ -117,45 +113,41 @@ class Key(Enum):
     RIGHT_META = 126
     MENU = 127
 
-
-# A US keyboard.
-UNSHIFTED: dict[str, Key] = {
-    **{c: Key[c.upper()] for c in string.ascii_lowercase},
-    **{d: Key[f"DIGIT_{d}"] for d in string.digits},
-    "-": Key.MINUS,
-    "=": Key.EQUAL,
-    "[": Key.LEFT_BRACKET,
-    "]": Key.RIGHT_BRACKET,
-    "\\": Key.BACKSLASH,
-    ";": Key.SEMICOLON,
-    "'": Key.APOSTROPHE,
-    "`": Key.GRAVE,
-    ",": Key.COMMA,
-    ".": Key.DOT,
-    "/": Key.SLASH,
-    " ": Key.SPACE,
-    "\n": Key.ENTER,
-    "\r": Key.ENTER,
-    "\t": Key.TAB,
-    "\b": Key.BACKSPACE,
-    "\x1b": Key.ESCAPE,
-}
-# Each character typed with shift, and the one typed without it on the same key.
-SHIFTED: dict[str, str] = {
-    **{c.upper(): c for c in string.ascii_lowercase},
-    **dict(zip(")!@#$%^&*(", string.digits)),
-    **dict(zip('_+{}|:"~<>?', "-=[]\\;'`,./")),
-}
-# Control characters (e.g. Ctrl-C), typed with ctrl and their letter.
-CONTROL: dict[str, str] = {
-    chr(ord(c) - ord("a") + 1): c for c in string.ascii_lowercase
-}
-KEYS: dict[str, list[Key]] = {
-    **{c: [Key.LEFT_CTRL, UNSHIFTED[u]] for c, u in CONTROL.items()},
-    # Some control characters have their own keys (e.g. tab).
-    **{c: [key] for c, key in UNSHIFTED.items()},
-    **{c: [Key.LEFT_SHIFT, UNSHIFTED[u]] for c, u in SHIFTED.items()},
-}
+    # The keys typing the character together on a US keyboard, e.g. shift and a letter, or ctrl and a letter for a
+    # control character (e.g. Ctrl-C).
+    @staticmethod
+    def from_chr(c: str) -> list[Key]:
+        keys = {
+            "-": Key.MINUS,
+            "=": Key.EQUAL,
+            "[": Key.LEFT_BRACKET,
+            "]": Key.RIGHT_BRACKET,
+            "\\": Key.BACKSLASH,
+            ";": Key.SEMICOLON,
+            "'": Key.APOSTROPHE,
+            "`": Key.GRAVE,
+            ",": Key.COMMA,
+            ".": Key.DOT,
+            "/": Key.SLASH,
+            " ": Key.SPACE,
+            "\n": Key.ENTER,
+            "\r": Key.ENTER,
+            "\t": Key.TAB,
+            "\b": Key.BACKSPACE,
+            "\x1b": Key.ESCAPE,
+        }
+        shifted = dict(zip(')!@#$%^&*(_+{}|:"~<>?', "0123456789-=[]\\;'`,./"))
+        if c in keys:
+            return [keys[c]]
+        if c in string.digits:
+            return [Key[f"DIGIT_{c}"]]
+        if c in string.ascii_letters:
+            return [Key.LEFT_SHIFT, Key[c]] if c.isupper() else [Key[c.upper()]]
+        if c in shifted:
+            return [Key.LEFT_SHIFT, *Key.from_chr(shifted[c])]
+        if "\x01" <= c <= "\x1a":
+            return [Key.LEFT_CTRL, Key[chr(ord(c) + ord("A") - 1)]]
+        raise ValueError(f"Can't type {c!r}")
 
 
 class KeyPressable(ABC):
@@ -163,20 +155,5 @@ class KeyPressable(ABC):
     def press(self, keys: Sequence[Key], hold_time: float = 0.1) -> None: ...
 
     def type_text(self, text: str, hold_time: float = 0.05) -> None:
-        if untypeable := sorted(set(text) - KEYS.keys()):
-            raise ValueError(f"Can't type {untypeable}")
-        for c in text:
-            self.press(KEYS[c], hold_time)
-
-
-class KeyPressableInputStream(InputStream):
-    def __init__(self, machine: KeyPressable) -> None:
-        self.machine = machine
-
-    @override
-    def write(self, data: bytes) -> None:
-        self.machine.type_text(data.decode())
-
-    @override
-    def close(self) -> None:
-        pass
+        for keys in [Key.from_chr(c) for c in text]:
+            self.press(keys, hold_time)

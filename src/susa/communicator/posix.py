@@ -3,21 +3,23 @@ from __future__ import annotations
 import gzip
 import shlex
 import tarfile
+from abc import abstractmethod
 from collections.abc import Mapping
 from io import BytesIO
 from pathlib import Path
+from subprocess import CompletedProcess
 
 from typing_extensions import override
 
-from susa.core.communicator import CommandRunner
+from susa.core.communicator import FileTransferrer
 
 PRINTF_CHUNK_SIZE = 512
 WRITE_CHUNK_SIZE = 1 << 15
 
 
-def printf_lines(data: bytes, target: str) -> list[str]:
-    # Short enough lines for a terminal, with nothing but POSIX `printf`.
-    return [
+# Appends the data to the target with nothing but POSIX `printf`, in lines short enough for a terminal.
+def printf_command(data: bytes, target: str) -> str:
+    return " &&\n".join(
         "printf '"
         + "".join(
             chr(b) if chr(b).isalnum() and b < 128 else f"\\{b:03o}"
@@ -25,26 +27,34 @@ def printf_lines(data: bytes, target: str) -> list[str]:
         )
         + f"' >> {target}"
         for i in range(0, len(data), PRINTF_CHUNK_SIZE)
-    ]
+    )
 
 
 # File transfers built on POSIX commands, over two primitives (`write_file` and `read_file`) that a faster channel may
 # replace (e.g. SSH's scp).
-class PosixFileTransfer(CommandRunner):
+class PosixFileTransfer(FileTransferrer):
+    # A command, with its output (stdout and stderr together).
+    @abstractmethod
+    def execute(self, command: str, timeout: float = 60) -> CompletedProcess[bytes]: ...
+
     def write_file(self, data: bytes, remote: str) -> None:
         # Compressed, and written with `printf` (there may be no decoder like `base64`, e.g. on FreeBSD 10).
         compressed = gzip.compress(data)
         temporary = shlex.quote(self.temporary_file())
         for i in range(0, len(compressed), WRITE_CHUNK_SIZE):
-            chunk = compressed[i : i + WRITE_CHUNK_SIZE]
-            self.check(" &&\n".join(printf_lines(chunk, temporary)))
-        self.check(f"gzip -dc < {temporary} > {shlex.quote(remote)} && rm {temporary}")
+            self.posix(printf_command(compressed[i : i + WRITE_CHUNK_SIZE], temporary))
+        self.posix(f"gzip -dc < {temporary} > {shlex.quote(remote)} && rm {temporary}")
 
     def read_file(self, remote: str) -> bytes:
-        return gzip.decompress(self.check(f"gzip -c {shlex.quote(remote)}"))
+        return gzip.decompress(self.posix(f"gzip -c {shlex.quote(remote)}"))
 
     def temporary_file(self) -> str:
-        return self.check("mktemp").decode().strip()
+        return self.posix("mktemp").decode().strip()
+
+    def posix(self, command: str) -> bytes:
+        result = self.execute(command)
+        result.check_returncode()
+        return result.stdout
 
     @override
     def upload_single(self, local: Path, remote: str) -> None:
@@ -59,23 +69,28 @@ class PosixFileTransfer(CommandRunner):
         archive = BytesIO()
         with tarfile.open(fileobj=archive, mode="w") as tar:
             for local, remote in files.items():
-                data = local.read_bytes()
-                # Unlike `tar.add`, this keeps absolute names.
+                # Unlike `tar.add`, this keeps absolute names (and not the local owner).
+                stat = local.stat()
                 info = tarfile.TarInfo(remote)
-                info.size, info.mode = len(data), local.stat().st_mode
-                tar.addfile(info, BytesIO(data))
+                info.size, info.mode, info.mtime = (
+                    stat.st_size,
+                    stat.st_mode,
+                    int(stat.st_mtime),
+                )
+                with local.open("rb") as file:
+                    tar.addfile(info, file)
         temporary = self.temporary_file()
         self.write_file(archive.getvalue(), temporary)
         # `-P` keeps each given path, absolute or relative.
-        self.check(f"tar -xPf {shlex.quote(temporary)} && rm {shlex.quote(temporary)}")
+        self.posix(f"tar -xPf {shlex.quote(temporary)} && rm {shlex.quote(temporary)}")
 
     @override
     def download(self, files: Mapping[str, Path]) -> None:
         temporary = self.temporary_file()
         paths = " ".join(map(shlex.quote, files))
-        self.check(f"tar -cPf {shlex.quote(temporary)} {paths}")
+        self.posix(f"tar -cPf {shlex.quote(temporary)} {paths}")
         archive = self.read_file(temporary)
-        self.check(f"rm {shlex.quote(temporary)}")
+        self.posix(f"rm {shlex.quote(temporary)}")
         with tarfile.open(fileobj=BytesIO(archive)) as tar:
             for member in tar.getmembers():
                 extracted = tar.extractfile(member)

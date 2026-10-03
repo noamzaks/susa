@@ -34,8 +34,7 @@ class Sniffer(Resource, OutputStream):
         return PcapReader(self.file(SNIFFER_TIMEOUT))  # type: ignore
 
     def next_packet(self) -> Packet:
-        packet: Packet = self.pcap.read_packet()
-        return packet
+        return self.pcap.read_packet()
 
     def packets(self) -> list[Packet]:
         return list(self.pcap)

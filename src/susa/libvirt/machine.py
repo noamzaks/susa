@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import time
 from collections.abc import Sequence
-from typing import cast
 
 import libvirt as lv
-from typing_extensions import Self, override
+from typing_extensions import override
 
-from susa.core.interface import Interface
+from susa.core.interface import BasicInterface, Interface
 from susa.core.keyboard import Key, KeyPressable
 from susa.core.machine import (
     Machine,
@@ -18,34 +17,23 @@ from susa.core.machine import (
     Snapshot,
     Snapshottable,
 )
-from susa.libvirt.entity import LVEntity, LVEntityState
-from susa.libvirt.interface import LVInterface
+from susa.libvirt.entity import LVEntity
 from susa.libvirt.interface_model import InterfaceModel
 from susa.libvirt.machine_model import MachineModel, SnapshotModel
 from susa.libvirt.network_model import NetworkModel
-from susa.libvirt.serial import LVConsole, LVSerial
+from susa.libvirt.serial import LVSerial
 from susa.libvirt.stream import LVStream
 
 SCREENSHOT_TIMEOUT = 60
 
 
-class LVSnapshotState(LVEntityState[SnapshotModel]):
-    # pydantic doesn't substitute `M` in inherited fields.
-    model: SnapshotModel
-    machine: LVMachine
-
-
 class LVSnapshot(LVEntity[lv.virDomainSnapshot, SnapshotModel], Snapshot):
-    state_type = LVSnapshotState
-
     def __init__(
         self,
         machine: LVMachine,
         model: SnapshotModel | None = None,
-        conn: lv.virConnect | None = None,
     ) -> None:
-        super().__init__(model=model or SnapshotModel(), conn=conn)
-
+        super().__init__(model or SnapshotModel())
         self.machine = machine
 
     @override
@@ -69,18 +57,6 @@ class LVSnapshot(LVEntity[lv.virDomainSnapshot, SnapshotModel], Snapshot):
         assert self.value is not None
         self.machine.domain.revertToSnapshot(self.value)
 
-    @override
-    def serialize(self) -> LVSnapshotState:
-        return {**super().serialize(), "machine": self.machine}
-
-    @classmethod
-    @override
-    def restore(cls, state: LVEntityState[SnapshotModel]) -> Self:
-        snapshot = cast(LVSnapshotState, state)
-        result = cls(snapshot["machine"], snapshot["model"])
-        result.reconnect(snapshot["uri"])
-        return result
-
 
 class LVMachine(
     LVEntity[lv.virDomain, MachineModel],
@@ -91,11 +67,8 @@ class LVMachine(
     SerialAccessible,
     KeyPressable,
 ):
-    state_type = LVEntityState[MachineModel]
-
-    def __init__(self, model: MachineModel, conn: lv.virConnect | None = None) -> None:
-        super().__init__(model, conn)
-        self.console = LVConsole(self)
+    def __init__(self, model: MachineModel) -> None:
+        super().__init__(model)
 
     @property
     def domain(self) -> lv.virDomain:
@@ -110,10 +83,10 @@ class LVMachine(
     @property
     @override
     def interfaces(self) -> list[Interface]:
-        return [
-            LVInterface(interface.get_mac(), self.reserved_ip(interface))
-            for interface in self.model.get_interfaces()
+        models = [
+            InterfaceModel(xml_model=i) for i in self.model.get_interfaces() or []
         ]
+        return [BasicInterface(m.get_mac(), self.reserved_ip(m)) for m in models]
 
     @override
     def create(self) -> None:
@@ -123,15 +96,14 @@ class LVMachine(
 
     @override
     def destroy(self) -> None:
-        if self.domain.isActive():
-            self.domain.destroy()
+        if self.is_powered_on:
+            self.power_off()
 
         flags = (
             lv.VIR_DOMAIN_UNDEFINE_MANAGED_SAVE
             | lv.VIR_DOMAIN_UNDEFINE_SNAPSHOTS_METADATA
         )
         if self.model.get_firmware() == "efi":
-            # Its copy of the UEFI variables too.
             flags |= lv.VIR_DOMAIN_UNDEFINE_NVRAM
         self.domain.undefineFlags(flags)
         self.value = None
@@ -175,11 +147,11 @@ class LVMachine(
         mime_type = self.domain.screenshot(stream.stream, 0)
         data = stream.read_all(SCREENSHOT_TIMEOUT)
         stream.close()
-        return Screenshot(data=data, mime_type=mime_type)
+        return Screenshot(data, mime_type)
 
     @override
     def serial(self) -> LVSerial:
-        return LVSerial(self.console)
+        return LVSerial(self)
 
     @override
     def press(self, keys: Sequence[Key], hold_time: float = 0.1) -> None:
@@ -194,11 +166,11 @@ class LVMachine(
         # libvirt returns before they're released, and the next keys would queue up behind them.
         time.sleep(hold_time)
 
-    # The IP its network reserved for the interface (see `NetworkModel.interface`).
     def reserved_ip(self, interface: InterfaceModel) -> str | None:
         network = interface.get_network()
         if network is None:
             return None
 
         xml = self.conn.networkLookupByName(network).XMLDesc()
-        return NetworkModel.parse(xml).get_ip(interface.get_mac())
+        hosts = NetworkModel.parse(xml).get_hosts() or []
+        return next((h.ip for h in hosts if h.mac == interface.get_mac()), None)

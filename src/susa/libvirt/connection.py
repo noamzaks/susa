@@ -1,31 +1,28 @@
 from __future__ import annotations
 
+import functools
 import threading
 from types import TracebackType
 from typing import ClassVar
 
 import libvirt as lv
+from typing_extensions import Self
 
 
+# Pickled as its URI, and opened again when unpickled.
 class Connection:
     # The innermost open connection is the current one.
     _open: ClassVar[list[Connection]] = []
-    _event_loop_lock: ClassVar[threading.Lock] = threading.Lock()
-    _event_loop_started: ClassVar[bool] = False
 
     def __init__(self, uri: str | None = None) -> None:
         self.uri = uri
         self.conn: lv.virConnect | None = None
 
-    def __enter__(self) -> lv.virConnect:
-        if self.conn is not None:
-            raise ValueError("Cannot open an already opened connection!")
-
-        Connection._start_event_loop()
-        self.conn = lv.open(self.uri)
+    def __enter__(self) -> Self:
+        assert self.conn is None
+        self.conn = open_connection(self.uri)
         Connection._open.append(self)
-
-        return self.conn
+        return self
 
     def __exit__(
         self,
@@ -38,28 +35,34 @@ class Connection:
         self.conn.close()
         self.conn = None
 
+    def __getstate__(self) -> str:
+        assert self.conn is not None
+        return self.conn.getURI()
+
+    def __setstate__(self, uri: str) -> None:
+        self.uri = uri
+        self.conn = open_connection(uri)
+
     @staticmethod
-    def current_conn() -> lv.virConnect:
+    def current() -> Connection:
         if not Connection._open:
             raise ValueError("There's no open libvirt connection!")
+        return Connection._open[-1]
 
-        conn = Connection._open[-1].conn
-        assert conn is not None
-        return conn
 
-    @staticmethod
-    def _start_event_loop() -> None:
-        # Streams (e.g. serial consoles) only receive data with an event loop, which has to be registered before
-        # connections are opened.
-        with Connection._event_loop_lock:
-            if Connection._event_loop_started:
-                return
+def open_connection(uri: str | None) -> lv.virConnect:
+    start_event_loop()
+    return lv.open(uri)
 
-            lv.virEventRegisterDefaultImpl()
-            threading.Thread(target=Connection._run_event_loop, daemon=True).start()
-            Connection._event_loop_started = True
 
-    @staticmethod
-    def _run_event_loop() -> None:
-        while True:
-            lv.virEventRunDefaultImpl()
+# Streams (e.g. serial consoles) only receive data with an event loop, which has to be registered before connections
+# are opened.
+@functools.cache
+def start_event_loop() -> None:
+    lv.virEventRegisterDefaultImpl()
+    threading.Thread(target=run_event_loop, daemon=True).start()
+
+
+def run_event_loop() -> None:
+    while True:
+        lv.virEventRunDefaultImpl()

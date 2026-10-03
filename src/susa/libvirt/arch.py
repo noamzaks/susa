@@ -8,18 +8,12 @@ from pathlib import Path
 # What works on each architecture (by libvirt's name for it), as `MachineModel` builder arguments.
 @dataclass(frozen=True)
 class ArchDefaults:
-    # What `MachineModel.default()` sets up.
     machine: str
     acpi: bool = True
-    apic: bool = False
     gic: bool = False
     # The CPU when emulating (KVM passes the host's through).
     tcg_cpu: str | None = None
     video: str = "virtio"
-    pcie: bool = True
-    # The USB controller's model (libvirt's default if `None`).
-    usb: str | None = None
-    console: str = "serial"
     # Extra QEMU arguments libvirt has no XML for.
     qemu_args: tuple[str, ...] = ()
 
@@ -31,40 +25,30 @@ class ArchDefaults:
 
 
 ARCH_DEFAULTS: dict[str, ArchDefaults] = {
-    "x86_64": ArchDefaults("q35", apic=True, disk_bus="sata"),
+    "x86_64": ArchDefaults("q35", disk_bus="sata"),
     "aarch64": ArchDefaults(
-        "virt",
-        gic=True,
-        tcg_cpu="maximum",
-        usb="qemu-xhci",
-        disk_bus="virtio",
-        nic="virtio",
+        "virt", gic=True, tcg_cpu="maximum", disk_bus="virtio", nic="virtio"
     ),
     "mips": ArchDefaults(
         "malta",
         acpi=False,
         # Malta's kernels only have a framebuffer driver for Cirrus.
         video="cirrus",
-        pcie=False,
         disk_bus="ide",
         # Malta only routes interrupts to PCI slots 11 and 12.
         pci_slots=(11, 12),
     ),
-    "ppc64le": ArchDefaults(
-        "pseries", acpi=False, video="vga", pcie=False, disk_bus="virtio"
-    ),
+    "ppc64le": ArchDefaults("pseries", acpi=False, video="vga", disk_bus="virtio"),
     "armv7l": ArchDefaults(
         "virt",
         acpi=False,
-        usb="qemu-xhci",
         # A 32-bit guest can't reach the PCI window above 4 GB.
         qemu_args=("-machine", "virt,highmem=off"),
         disk_bus="virtio",
     ),
-    "riscv64": ArchDefaults("virt", usb="qemu-xhci", disk_bus="virtio", nic="virtio"),
+    "riscv64": ArchDefaults("virt", disk_bus="virtio", nic="virtio"),
     "i686": ArchDefaults(
         "q35",
-        apic=True,
         # An i486-class CPU, since a true i386 crashes any kernel newer than ~2013.
         qemu_args=("-cpu", "qemu32,family=4"),
         disk_bus="sata",
@@ -75,11 +59,9 @@ ARCH_DEFAULTS: dict[str, ArchDefaults] = {
 # The host's architecture, by libvirt's name for it.
 def host_arch() -> str:
     machine = platform.machine()
-    if machine in ("aarch64", "arm64"):
-        return "aarch64"
-    if machine in ("x86_64", "amd64", "AMD64"):
-        return "x86_64"
-    raise ValueError(f"Unknown host architecture: {machine!r}")
+    return {"arm64": "aarch64", "amd64": "x86_64", "AMD64": "x86_64"}.get(
+        machine, machine
+    )
 
 
 def have_kvm(arch: str) -> bool:

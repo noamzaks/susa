@@ -7,7 +7,6 @@ from susa.core.machine import SerialAccessible
 from susa.core.stream import InputOutputStream
 
 
-# A shell on a machine's serial console.
 class SerialCommunicator(ShellCommunicator):
     def __init__(self, machine: SerialAccessible, login: Login | None = None) -> None:
         super().__init__(login)
