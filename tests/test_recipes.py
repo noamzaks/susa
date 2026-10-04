@@ -17,7 +17,7 @@ from susa.libvirt import (
     MachineModel,
     NetworkModel,
 )
-from susa.recipes import CLASSES, Recipe, RecipeJsonSchema
+from susa.recipes import CLASSES, Recipe
 from susa.utilities.generic import GIGA
 
 MACHINE = "susa.libvirt.machine_model.MachineModel"
@@ -156,10 +156,10 @@ def test_make_file(tmp_path: Path) -> None:
 
 
 def test_schema() -> None:
-    schema = Recipe.model_json_schema(schema_generator=RecipeJsonSchema)
+    schema = Recipe.model_json_schema()
     defs = schema["$defs"]
-    recipes = [defs[ref["$ref"].split("/")[-1]] for ref in defs["Recipe"]["oneOf"]]
-    assert {name for recipe in recipes for name in recipe["properties"]} == set(CLASSES)
+    for name, cls in CLASSES.items():
+        assert list(defs[f"{cls.__name__}Recipe"]["properties"]) == [name]
     ssh = defs["SSHCommunicator___init__"]
     assert ssh["required"] == ["host", "username"]
     # Any argument can be a reference or a recipe.
