@@ -1,31 +1,33 @@
+# A workspace of SUSA's packages (see `packages/`), developed and tested together.
 [project]
-name = "susa"
+name = "susa-workspace"
 version = "0.1.0"
-description = "SUSA Unified Systems API - programmatically work with machines"
-readme = "README.md"
-authors = [
-    { name = "Noam Zaks", email = "noam@noamzaks.com" }
-]
 requires-python = ">=3.10"
 dependencies = [
-    "libvirt-python>=12.6.0",
-    "pexpect>=4.9.0",
-    "pydantic>=2.13.4",
-    "pydantic-libvirt",
-    "pydantic-xml>=2.21.1",
-    "typing-extensions>=4.16.0",
+    "susa-core",
+    "susa-communicator",
+    "susa-libvirt",
+    "susa-recipes[communicator,libvirt]",
 ]
 
-[build-system]
-requires = ["uv_build>=0.11.7,<0.12.0"]
-build-backend = "uv_build"
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["packages/*"]
 
 [tool.uv.sources]
+susa-core = { workspace = true }
+susa-communicator = { workspace = true }
+susa-libvirt = { workspace = true }
+susa-recipes = { workspace = true }
 pydantic-libvirt = { git = "https://github.com/noamzaks/pydantic-libvirt" }
 
 [tool.mypy]
 strict = true
-files = ["src", "tests"]
+files = ["packages/*/src", "tests"]
+explicit_package_bases = true
+mypy_path = ["packages/susa-core/src", "packages/susa-communicator/src", "packages/susa-libvirt/src", "packages/susa-recipes/src"]
 enable_error_code = ["explicit-override"]
 # Abstract classes can be asked for (e.g. `cook(recipe, ShellCommunicator)`), as `isinstance` checks them.
 disable_error_code = ["type-abstract"]
@@ -37,6 +39,9 @@ addopts = ["--dist", "loadgroup"]
 
 [tool.ruff.lint]
 ignore = ["UP035", "LOG015"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["susa"]
 
 [dependency-groups]
 dev = [

@@ -1,0 +1,30 @@
+[project]
+name = "susa-recipes"
+version = "0.1.0"
+description = "SUSA objects and sessions from JSON recipes"
+authors = [
+    { name = "Noam Zaks", email = "noam@noamzaks.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "susa-core",
+    "pydantic>=2.13.4",
+    "typing-extensions>=4.16.0",
+]
+
+# The packages whose classes recipes can make.
+[project.optional-dependencies]
+communicator = ["susa-communicator"]
+libvirt = ["susa-libvirt"]
+
+[build-system]
+requires = ["uv_build>=0.11.7,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "susa.recipes"
+
+[tool.uv.sources]
+susa-core = { workspace = true }
+susa-communicator = { workspace = true }
+susa-libvirt = { workspace = true }

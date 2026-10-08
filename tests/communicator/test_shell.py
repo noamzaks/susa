@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+import re
 from collections.abc import Iterator
 from pathlib import Path
 from subprocess import CalledProcessError, CompletedProcess
@@ -11,10 +12,10 @@ from typing_extensions import override
 from susa.communicator import shell as shell_module
 from susa.communicator.login import ENTER
 from susa.communicator.process import ProcessStream
-from susa.communicator.shell import Prelude, ShellCommunicator
+from susa.communicator.shell import PexpectStream, Prelude, ShellCommunicator
 from susa.communicator.unix import UnixCommunicator
 from susa.core.communicator import CommandRunner
-from susa.core.stream import InputOutputStream
+from susa.core.stream import InputOutputStream, OutputStream
 
 SHELLS = {
     "bash": ["bash", "--norc", "--noprofile", "-i"],
@@ -55,7 +56,6 @@ def assert_gone(runner: CommandRunner, pattern: str) -> None:
     )
 
 
-# Output is stdout and stderr together, exactly as written.
 def test_shell_run(shell: LocalShell) -> None:
     assert result(shell.run("cd /tmp; pwd; echo e >&2; false")) == (
         1,
@@ -154,7 +154,6 @@ def test_transfer_multiple(
     (tmp_path / "remote").mkdir()
     (tmp_path / "down").mkdir()
     shell.run(f"cd {tmp_path}")
-    # Absolute and relative remote paths.
     remotes = {"a": str(tmp_path / "remote" / "a"), "b": "remote/b", "c": "remote/c"}
     unix.upload({tmp_path / n: r for n, r in remotes.items()})
     unix.download({r: tmp_path / "down" / n for n, r in remotes.items()})
@@ -178,3 +177,21 @@ def test_discarded_input(
     shell.quiet_time = 0.2
     with shell:
         assert shell.run("echo exact").stdout == b"exact\n"
+
+
+class BufferedStream(OutputStream):
+    def __init__(self, *chunks: bytes) -> None:
+        self.chunks = list(chunks)
+
+    @override
+    def read(self, size: int | None = None, timeout: float | None = 0) -> bytes:
+        return self.chunks.pop(0) if self.chunks else b""
+
+
+def test_expect() -> None:
+    stream = PexpectStream(BufferedStream(b"booting\r\nsusa lo", b"gin: after"))
+    assert stream.expect([rb"login: ", rb"Password: "], timeout=1) == 0
+    assert stream.before == b"booting\r\nsusa "
+    assert stream.expect(rb"af(t)er", timeout=1) == 0
+    assert isinstance(stream.match, re.Match)
+    assert stream.match.group(1) == b"t"

@@ -16,7 +16,9 @@ around libvirt/QEMU virtual machines of many architectures.
 
 - **Layers.** `susa.core` holds backend-independent contracts (abstract classes) only. `susa.libvirt` implements them,
   `susa.communicator` runs commands over any stream, `susa.recipes` makes objects from JSON, and `susa.utilities` holds
-  general helpers.
+  general helpers. Each is its own distribution in the uv workspace under `packages/` (`susa-core` holds core and
+  utilities), sharing the `susa` namespace package (so there's no `susa/__init__.py`), and depends only on those below
+  it: core, then communicator and libvirt, then recipes.
 - **Bottom up.** Parts are small and independent (models, entities, communicators), each can be a JSON recipe, and they
   connect directly (e.g. `machine.network(network)`, `SSHCommunicator(machine, ...)`, `{"$ref": "machine"}`).
   Conveniences are opt-in, generic and composable (e.g. `Session`); nothing imposes a layout or an orchestration.

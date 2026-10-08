@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import re
 import time
 
 import pytest
 from typing_extensions import override
 
-from susa.core.stream import OutputStream, PexpectStream
+from susa.core.stream import OutputStream
 
 
 class FakeStream(OutputStream):
@@ -30,8 +29,6 @@ def test_read_until_timeout() -> None:
 
 
 class SlowStream(OutputStream):
-    # Data every `interval` seconds, forever.
-
     def __init__(self, interval: float) -> None:
         self.interval = interval
 
@@ -49,14 +46,4 @@ def test_wait_until_quiet() -> None:
     start = time.time()
     with pytest.raises(TimeoutError):
         SlowStream(0.05).wait_until_quiet(0.3, timeout=1)
-    # It doesn't start a quiet period that wouldn't fit before the timeout.
     assert time.time() - start < 1
-
-
-def test_expect() -> None:
-    stream = PexpectStream(FakeStream(b"booting\r\nsusa lo", b"gin: after"))
-    assert stream.expect([rb"login: ", rb"Password: "], timeout=1) == 0
-    assert stream.before == b"booting\r\nsusa "
-    assert stream.expect(rb"af(t)er", timeout=1) == 0
-    assert isinstance(stream.match, re.Match)
-    assert stream.match.group(1) == b"t"

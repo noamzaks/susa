@@ -52,9 +52,7 @@ def test_free_subnet() -> None:
     subnet = free_subnet()
     assert subnet.prefixlen == 24 and subnet.subnet_of(SUBNETS)
     assert not any(subnet.overlaps(other) for other in host_subnets())
-    # Taken by this process.
     assert free_subnet() != subnet
-    # And by others, in parallel.
     with ProcessPoolExecutor(4, multiprocessing.get_context("spawn")) as pool:
         subnets = {subnet, *(pool.submit(free_subnet).result() for _ in range(4))}
     assert len(subnets) == 5

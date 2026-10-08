@@ -202,7 +202,6 @@ def test_machine_model_interface_keeps_address() -> None:
     assert interface.xml_model.address is not None
     assert interface.xml_model.address.slot == 12
 
-    # An address that's already set isn't overridden.
     other = InterfaceModel.parse(interface.build())
     assert other.xml_model.address is not None
     other.xml_model.address.slot = 5

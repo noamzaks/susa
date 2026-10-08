@@ -17,7 +17,6 @@ from susa.communicator.shell import ShellCommunicator
 from susa.communicator.unix import UnixCommunicator
 from susa.core.communicator import FileTransferrer
 from susa.core.machine import wait_until_booted
-from susa.core.session import Session
 from susa.libvirt import (
     Connection,
     LVMachine,
@@ -27,6 +26,7 @@ from susa.libvirt import (
     VolumeModel,
 )
 from susa.recipes import Recipe
+from susa.recipes.session import Session
 from susa.utilities.generic import GIGA, wait_until
 from susa.utilities.networking import ping
 
@@ -47,7 +47,6 @@ class Image:
     path: Path
     steps: list[Any]
 
-    # A machine on a network with an available IP and a volume of its own backed by the image.
     def session(self, path: Path | None = None) -> list[dict[str, Any]]:
         machine = [
             *self.steps,
@@ -171,7 +170,7 @@ def session(request: pytest.FixtureRequest, connection: None) -> Iterator[Sessio
     image = IMAGES[request.param]
     if not image.path.exists():
         pytest.skip(f"{image.path} doesn't exist")
-    with Session.parse(image.session()) as session:
+    with Session.model_validate({"objects": image.session()}) as session:
         boot(session.get("machine", LVMachine))
         yield session
 
@@ -182,14 +181,12 @@ def ready(session: Session) -> Iterator[LVSnapshot]:
         yield snapshot
 
 
-# The name (in `IMAGES`) of the machine the test got.
 @pytest.fixture
 def name(request: pytest.FixtureRequest) -> str:
     result: str = request.node.callspec.params["session"]
     return result
 
 
-# The machine as it was once it booted.
 @pytest.fixture
 def machine(session: Session, ready: LVSnapshot) -> Iterator[LVMachine]:
     yield session.get("machine", LVMachine)
@@ -335,7 +332,7 @@ def test_sniff(machine: LVMachine, network: LVNetwork) -> None:
     assert len(requests) == 3
 
 
-# A new image, where QEMU can read it.
+# Where QEMU can read it.
 @pytest.fixture
 def committed() -> Iterator[Path]:
     path = MACHINES / f"susa-committed-{os.getpid()}.qcow2"
@@ -357,7 +354,7 @@ def test_commit(
     wait_until(lambda _: not machine.is_powered_on, BOOT_TIMEOUT)
     volume.commit(committed)
     recipe = [*IMAGES[name].session(committed), {"ssh": COMMUNICATORS["ssh"]}]
-    with Session.parse(recipe) as session:
+    with Session.model_validate({"objects": recipe}) as session:
         ssh = session.get("ssh", ShellCommunicator)
         assert ssh.check("cat /root/susa-commit") == b"committed\n"
 

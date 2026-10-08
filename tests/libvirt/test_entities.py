@@ -1,5 +1,3 @@
-# The libvirt entities, against libvirt's mock driver (which doesn't run anything).
-
 from __future__ import annotations
 
 import pickle
@@ -205,7 +203,6 @@ def test_snapshot() -> None:
         assert snapshot.value is not None
         assert machine.value is not None
 
-        # Destroying reverts, and deletes the snapshot.
         snapshot.destroy()
         assert snapshot.value is None
         assert machine.domain.snapshotListNames() == []
@@ -215,7 +212,6 @@ def test_snapshot_context() -> None:
     with LVMachine(domain()) as machine:
         with machine.snapshot() as snapshot:
             machine.power_off()
-        # Leaving it reverts.
         assert snapshot.value is None
         assert machine.is_powered_on
 
@@ -250,7 +246,6 @@ def test_nested_connection() -> None:
     assert Connection.current() is outer
 
 
-# Entities find their libvirt objects again when unpickled, if they're still there.
 def test_pickle() -> None:
     network = LVNetwork(NetworkModel().default().ip("10.0.0.1"))
     volume = LVVolume(VolumeModel().pool("default-pool").capacity(GIGA))
@@ -261,4 +256,11 @@ def test_pickle() -> None:
         for entity, copy in zip(entities, pickle.loads(pickle.dumps(entities))):
             assert copy.model == entity.model
             assert copy.value is not None
+            assert copy.connection is Connection.current()
     assert pickle.loads(pickle.dumps(machine)).value is None
+
+
+def test_unpickle_connection() -> None:
+    pickled = pickle.dumps(Connection.current())
+    with Connection("test:///default") as inner:
+        assert pickle.loads(pickled) is inner

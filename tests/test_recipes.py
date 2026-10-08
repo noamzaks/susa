@@ -127,7 +127,6 @@ def test_make_references() -> None:
     serial: SerialCommunicator = Recipe.model_validate(recipe).make(machine=machine)
     assert (serial.machine, serial.prelude) == (machine, Login("a"))
 
-    # A reference to an attribute.
     recipe = {SERIAL: {"machine": {"$ref": "serial.machine"}}}
     assert Recipe.model_validate(recipe).make(serial=serial).machine is machine
 
@@ -162,6 +161,5 @@ def test_schema() -> None:
         assert list(defs[f"{cls.__name__}Recipe"]["properties"]) == [name]
     ssh = defs["SSHCommunicator___init__"]
     assert ssh["required"] == ["host", "username"]
-    # Any argument can be a reference or a recipe.
     for argument in ("host", "port"):
         assert {"$ref": "#/$defs/Reference"} in ssh["properties"][argument]["anyOf"]

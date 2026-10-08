@@ -41,7 +41,6 @@ def test_type_text_unsupported() -> None:
     keyboard = FakeKeyboard()
     with pytest.raises(ValueError, match="é"):
         keyboard.type_text("abcé")
-    # Nothing was typed.
     assert keyboard.presses == []
 
 

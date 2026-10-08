@@ -6,6 +6,15 @@ resolution-markers = [
     "python_full_version < '3.15'",
 ]
 
+[manifest]
+members = [
+    "susa-communicator",
+    "susa-core",
+    "susa-libvirt",
+    "susa-recipes",
+    "susa-workspace",
+]
+
 [[package]]
 name = "annotated-types"
 version = "0.8.0"
@@ -871,16 +880,91 @@ wheels = [
 ]
 
 [[package]]
-name = "susa"
+name = "susa-communicator"
 version = "0.1.0"
-source = { editable = "." }
+source = { editable = "packages/susa-communicator" }
+dependencies = [
+    { name = "pexpect" },
+    { name = "susa-core" },
+    { name = "typing-extensions" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pexpect", specifier = ">=4.9.0" },
+    { name = "susa-core", editable = "packages/susa-core" },
+    { name = "typing-extensions", specifier = ">=4.16.0" },
+]
+
+[[package]]
+name = "susa-core"
+version = "0.1.0"
+source = { editable = "packages/susa-core" }
+dependencies = [
+    { name = "typing-extensions" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "typing-extensions", specifier = ">=4.16.0" }]
+
+[[package]]
+name = "susa-libvirt"
+version = "0.1.0"
+source = { editable = "packages/susa-libvirt" }
 dependencies = [
     { name = "libvirt-python" },
-    { name = "pexpect" },
-    { name = "pydantic" },
     { name = "pydantic-libvirt" },
     { name = "pydantic-xml" },
+    { name = "susa-core" },
     { name = "typing-extensions" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "libvirt-python", specifier = ">=12.6.0" },
+    { name = "pydantic-libvirt", git = "https://github.com/noamzaks/pydantic-libvirt" },
+    { name = "pydantic-xml", specifier = ">=2.21.1" },
+    { name = "susa-core", editable = "packages/susa-core" },
+    { name = "typing-extensions", specifier = ">=4.16.0" },
+]
+
+[[package]]
+name = "susa-recipes"
+version = "0.1.0"
+source = { editable = "packages/susa-recipes" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "susa-core" },
+    { name = "typing-extensions" },
+]
+
+[package.optional-dependencies]
+communicator = [
+    { name = "susa-communicator" },
+]
+libvirt = [
+    { name = "susa-libvirt" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pydantic", specifier = ">=2.13.4" },
+    { name = "susa-communicator", marker = "extra == 'communicator'", editable = "packages/susa-communicator" },
+    { name = "susa-core", editable = "packages/susa-core" },
+    { name = "susa-libvirt", marker = "extra == 'libvirt'", editable = "packages/susa-libvirt" },
+    { name = "typing-extensions", specifier = ">=4.16.0" },
+]
+provides-extras = ["communicator", "libvirt"]
+
+[[package]]
+name = "susa-workspace"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "susa-communicator" },
+    { name = "susa-core" },
+    { name = "susa-libvirt" },
+    { name = "susa-recipes", extra = ["communicator", "libvirt"] },
 ]
 
 [package.dev-dependencies]
@@ -899,12 +983,10 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "libvirt-python", specifier = ">=12.6.0" },
-    { name = "pexpect", specifier = ">=4.9.0" },
-    { name = "pydantic", specifier = ">=2.13.4" },
-    { name = "pydantic-libvirt", git = "https://github.com/noamzaks/pydantic-libvirt" },
-    { name = "pydantic-xml", specifier = ">=2.21.1" },
-    { name = "typing-extensions", specifier = ">=4.16.0" },
+    { name = "susa-communicator", editable = "packages/susa-communicator" },
+    { name = "susa-core", editable = "packages/susa-core" },
+    { name = "susa-libvirt", editable = "packages/susa-libvirt" },
+    { name = "susa-recipes", extras = ["communicator", "libvirt"], editable = "packages/susa-recipes" },
 ]
 
 [package.metadata.requires-dev]
