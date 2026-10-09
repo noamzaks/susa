@@ -10,39 +10,24 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Literal, overload
+from typing import ClassVar
 
+from typing_extensions import override
+
+from susa.core.resource import Resource
 from susa.utilities.generic import wait_until
 
 PING_REPLY_PATTERN = re.compile(r"icmp_seq=(\d+)\b.*?\btime=([\d.]+) ms")
-SUBNETS = ipaddress.IPv4Network("10.0.0.0/8")
-PING_TIMEOUT = 2
-LOCK = Path(tempfile.gettempdir()) / "susa-subnets.lock"
-# A process' own locks don't stop it.
-TAKEN: set[ipaddress.IPv4Network] = set()
 
 
-@overload
-def ping(  # type: ignore
-    host: str,
-    count: Literal[1] = 1,
-    timeout: float | None = 1,
-    interval: float | None = None,
-) -> float | None: ...
+def ping(host: str, timeout: float | None = 1) -> float | None:
+    [time] = pings(host, 1, timeout)
+    return time
 
 
-@overload
-def ping(
-    host: str,
-    count: int,
-    timeout: float | None = 1,
-    interval: float | None = None,
-) -> list[float | None]: ...
-
-
-def ping(
-    host: str, count: int = 1, timeout: float | None = 1, interval: float | None = None
-) -> list[float | None] | float | None:
+def pings(
+    host: str, count: int, timeout: float | None = 1, interval: float | None = None
+) -> list[float | None]:
     command = ["ping", "-n", "-c", str(count)]
     if interval is not None:
         command += ["-i", str(interval)]
@@ -73,15 +58,11 @@ def ping(
 
         times[index] = time
 
-    return times[0] if count == 1 else times
+    return times
 
 
 def wait_until_ping(host: str, timeout: float | None = None) -> None:
-    def answers(remaining: float | None) -> bool:
-        attempt = PING_TIMEOUT if remaining is None else min(PING_TIMEOUT, remaining)
-        return ping(host, timeout=attempt) is not None
-
-    wait_until(answers, timeout)
+    wait_until(lambda: ping(host) is not None, timeout)
 
 
 def random_mac(prefix: str | None = None) -> str:
@@ -90,37 +71,61 @@ def random_mac(prefix: str | None = None) -> str:
     return ":".join(parts)
 
 
-def free_subnet() -> ipaddress.IPv4Network:
-    used = host_subnets()
-    lock = lock_file()
-    for index, subnet in enumerate(SUBNETS.subnets(new_prefix=24)):
-        if subnet in TAKEN or any(subnet.overlaps(other) for other in used):
-            continue
-        try:
-            fcntl.lockf(lock, fcntl.LOCK_EX | fcntl.LOCK_NB, 1, index)
-        except OSError:
-            continue
-        TAKEN.add(subnet)
-        return subnet
-    raise RuntimeError(f"There's no free subnet left in {SUBNETS}")
+# A /24 overlapping none of the host's routes, reserved across processes by locking its byte of `LOCK`.
+class SubnetReservation(Resource):
+    SUBNETS = ipaddress.IPv4Network("10.0.0.0/8")
+    LOCK = Path(tempfile.gettempdir()) / "susa-subnets.lock"
+    # A process' own locks don't stop it.
+    TAKEN: ClassVar[set[ipaddress.IPv4Network]] = set()
 
+    def __init__(self) -> None:
+        self.index: int | None = None
+        self.subnet: ipaddress.IPv4Network | None = None
 
-# Kept open, as closing any of the process' descriptors of it releases its locks. Every user locks it, which the umask
-# stops at creation.
-@functools.cache
-def lock_file() -> int:
-    lock = os.open(LOCK, os.O_CREAT | os.O_RDWR, 0o666)
-    if os.fstat(lock).st_uid == os.getuid():
-        os.fchmod(lock, 0o666)
-    return lock
+    @property
+    def address(self) -> str:
+        assert self.subnet is not None
+        return str(next(self.subnet.hosts()))
 
+    @override
+    def create(self) -> None:
+        assert self.subnet is None
+        used = self.host_subnets()
+        for index, subnet in enumerate(self.SUBNETS.subnets(new_prefix=24)):
+            if subnet in self.TAKEN or any(subnet.overlaps(other) for other in used):
+                continue
+            try:
+                fcntl.lockf(self.lock_file(), fcntl.LOCK_EX | fcntl.LOCK_NB, 1, index)
+            except OSError:
+                continue
+            self.TAKEN.add(subnet)
+            self.index, self.subnet = index, subnet
+            return
+        raise RuntimeError(f"There's no free subnet left in {self.SUBNETS}")
 
-def host_subnets() -> list[ipaddress.IPv4Network]:
-    routes = json.loads(
-        subprocess.check_output(["ip", "-json", "-4", "route", "show", "table", "all"])
-    )
-    return [
-        ipaddress.IPv4Network(route["dst"], strict=False)
-        for route in routes
-        if route["dst"] != "default"
-    ]
+    @override
+    def destroy(self) -> None:
+        assert self.index is not None and self.subnet is not None
+        fcntl.lockf(self.lock_file(), fcntl.LOCK_UN, 1, self.index)
+        self.TAKEN.remove(self.subnet)
+        self.index, self.subnet = None, None
+
+    # Kept open, as closing any of the process' descriptors of it releases its locks. Every user locks it, which the
+    # umask stops at creation.
+    @staticmethod
+    @functools.cache
+    def lock_file() -> int:
+        lock = os.open(SubnetReservation.LOCK, os.O_CREAT | os.O_RDWR, 0o666)
+        if os.fstat(lock).st_uid == os.getuid():
+            os.fchmod(lock, 0o666)
+        return lock
+
+    @staticmethod
+    def host_subnets() -> list[ipaddress.IPv4Network]:
+        command = ["ip", "-json", "-4", "route", "show", "table", "all"]
+        routes = json.loads(subprocess.check_output(command))
+        return [
+            ipaddress.IPv4Network(route["dst"], strict=False)
+            for route in routes
+            if route["dst"] != "default"
+        ]

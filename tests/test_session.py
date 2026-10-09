@@ -10,10 +10,12 @@ from susa.core.machine import Snapshottable, SnapshottableGroup
 from susa.libvirt import Connection, LVMachine, LVNetwork, LVVolume, MachineModel
 from susa.recipes.session import Session
 from susa.utilities.generic import GIGA
+from susa.utilities.networking import SubnetReservation
 
 MACHINE = "susa.libvirt.machine_model.MachineModel"
 NETWORK = "susa.libvirt.network_model.NetworkModel"
 VOLUME = "susa.libvirt.volume_model.VolumeModel"
+SUBNET = "susa.utilities.networking.SubnetReservation"
 LV_NETWORK = "susa.libvirt.network.LVNetwork"
 LV_VOLUME = "susa.libvirt.volume.LVVolume"
 LV_MACHINE = "susa.libvirt.machine.LVMachine"
@@ -24,7 +26,8 @@ def machine_model(*steps: Any) -> dict[str, Any]:
 
 
 SESSION: list[dict[str, Any]] = [
-    {"network_model": {NETWORK: ["default", "ip"]}},
+    {"subnet": {SUBNET: {}}},
+    {"network_model": {NETWORK: ["default", {"ip": {"$ref": "subnet.address"}}]}},
     {"volume_model": {VOLUME: [{"pool": "default-pool"}, {"capacity": GIGA}]}},
     {
         "machine_model": machine_model(
@@ -54,6 +57,7 @@ def test_session() -> None:
         with pytest.raises(AssertionError):
             session.get("volume", LVMachine)
     assert machine.value is None
+    assert session.get("subnet", SubnetReservation).subnet is None
 
 
 def test_session_unique_names() -> None:
@@ -77,7 +81,7 @@ def test_session_refers_back() -> None:
 
 
 def test_session_create_fails() -> None:
-    network = {LV_NETWORK: {"model": {NETWORK: ["default", "ip"]}}}
+    network = {LV_NETWORK: {"model": {NETWORK: ["default", {"ip": "10.0.0.1"}]}}}
     volume = {LV_VOLUME: {"model": {VOLUME: [{"pool": "nothing"}]}}}
     session = Session.model_validate(
         {"objects": [{"network": network}, {"volume": volume}]}

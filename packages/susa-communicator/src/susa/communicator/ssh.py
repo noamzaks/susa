@@ -12,15 +12,15 @@ from susa.communicator.shell import ShellCommunicator
 from susa.core.communicator import FileTransferrer
 from susa.core.stream import InputOutputStream
 
-OPTIONS = [
-    "-oStrictHostKeyChecking=no",
-    "-oUserKnownHostsFile=/dev/null",
-    "-oLogLevel=ERROR",
-]
-
 
 # ssh reads passwords from the terminal only after prompting, so sshpass gives them.
 class SSHCommunicator(ShellCommunicator, FileTransferrer):
+    OPTIONS = (
+        "-oStrictHostKeyChecking=no",
+        "-oUserKnownHostsFile=/dev/null",
+        "-oLogLevel=ERROR",
+    )
+
     def __init__(
         self,
         host: str,
@@ -68,7 +68,7 @@ class SSHCommunicator(ShellCommunicator, FileTransferrer):
 
     def command(self, program: str, *args: str) -> list[str]:
         sshpass = [] if self.password is None else ["sshpass", "-e"]
-        return [*sshpass, program, *OPTIONS, *args]
+        return [*sshpass, program, *self.OPTIONS, *args]
 
     def environment(self) -> dict[str, str]:
         if self.password is None:

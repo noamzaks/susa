@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, TypeVar
 
 import pydantic
-from typing_extensions import Self, TypeVar, override
+from typing_extensions import Self, override
 
 from susa.core.resource import Resource
 from susa.recipes import Recipe
 
-T = TypeVar("T", default=Any)
+T = TypeVar("T")
 
 NamedRecipe = Annotated[dict[str, Recipe], pydantic.Field(min_length=1, max_length=1)]
 
@@ -26,12 +26,12 @@ class Session(pydantic.BaseModel, Resource, extra="forbid"):
             raise ValueError("Names must be unique")
         return self
 
-    def get(self, name: str, cls: type[T] = object) -> T:  # type: ignore
+    def get(self, name: str, cls: type[T]) -> T:
         result = self._made[name]
         assert isinstance(result, cls)
         return result
 
-    def all(self, cls: type[T] = object) -> list[T]:  # type: ignore
+    def all(self, cls: type[T]) -> list[T]:
         return [o for o in self._made.values() if isinstance(o, cls)]
 
     @override

@@ -13,9 +13,6 @@ from susa.core.network import Network, Sniffable, Sniffer
 from susa.libvirt.entity import LVEntity
 from susa.libvirt.network_model import NetworkModel
 
-CHUNK_SIZE = 1 << 16
-CAPTURE_DRAIN_TIME = 1
-
 
 class LVNetwork(LVEntity[lv.virNetwork, NetworkModel], Network, Sniffable):
     def __init__(self, model: NetworkModel) -> None:
@@ -55,6 +52,9 @@ class LVNetwork(LVEntity[lv.virNetwork, NetworkModel], Network, Sniffable):
 
 
 class LVSniffer(Sniffer):
+    CHUNK_SIZE = 1 << 16
+    CAPTURE_DRAIN_TIME = 1
+
     def __init__(self, interface: str) -> None:
         self.interface = interface
         self.process: subprocess.Popen[bytes] | None = None
@@ -73,7 +73,7 @@ class LVSniffer(Sniffer):
     def destroy(self) -> None:
         assert self.process is not None
         # Let packets that were just captured reach tcpdump.
-        time.sleep(CAPTURE_DRAIN_TIME)
+        time.sleep(self.CAPTURE_DRAIN_TIME)
         self.process.terminate()
         self.process.wait()
 
@@ -82,7 +82,7 @@ class LVSniffer(Sniffer):
         assert self.process is not None and self.process.stdout is not None
         if not select.select([self.process.stdout], [], [], timeout)[0]:
             return b""
-        data = os.read(self.process.stdout.fileno(), size or CHUNK_SIZE)
+        data = os.read(self.process.stdout.fileno(), size or self.CHUNK_SIZE)
         if not data:
             raise EOFError
         return data

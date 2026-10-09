@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, TypeVar, cast
+from typing import Any, ClassVar, TypeVar, cast
 
 import pydantic_libvirt.domain as lvdomain
 import pydantic_libvirt.domainsnapshot as lvdomainsnapshot
@@ -18,11 +18,11 @@ from susa.utilities.generic import random_id
 
 D = TypeVar("D")
 
-# The device names libvirt gives disks on each bus ("sd" for any other).
-BUS_PREFIXES = {"ide": "hd", "fdc": "fd", "virtio": "vd"}
-
 
 class MachineModel(Model[lvdomain.domain]):
+    # The device names libvirt gives disks on each bus ("sd" for any other).
+    BUS_PREFIXES: ClassVar[dict[str, str]] = {"ide": "hd", "fdc": "fd", "virtio": "vd"}
+
     def __init__(
         self, name: str | None = None, xml_model: lvdomain.domain | None = None
     ) -> None:
@@ -201,7 +201,7 @@ class MachineModel(Model[lvdomain.domain]):
         disks = self.get_devices().disk_list
         assert disks is not None
 
-        prefix = BUS_PREFIXES.get(bus, "sd") if bus is not None else "sd"
+        prefix = self.BUS_PREFIXES.get(bus, "sd") if bus is not None else "sd"
         suffix = ""
         index = len(disks) + 1
         while index > 0:

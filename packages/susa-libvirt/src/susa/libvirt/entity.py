@@ -11,15 +11,15 @@ from susa.libvirt.model import Model
 T = TypeVar("T")
 M = TypeVar("M", bound=Model[Any])
 
-NOT_FOUND = (
-    lv.VIR_ERR_NO_DOMAIN,
-    lv.VIR_ERR_NO_NETWORK,
-    lv.VIR_ERR_NO_STORAGE_VOL,
-    lv.VIR_ERR_NO_DOMAIN_SNAPSHOT,
-)
-
 
 class LVEntity(ABC, Generic[T, M]):
+    NOT_FOUND = (
+        lv.VIR_ERR_NO_DOMAIN,
+        lv.VIR_ERR_NO_NETWORK,
+        lv.VIR_ERR_NO_STORAGE_VOL,
+        lv.VIR_ERR_NO_DOMAIN_SNAPSHOT,
+    )
+
     # Subclasses redeclare it with their model's class, which recipes would otherwise see as `M`.
     def __init__(self, model: M) -> None:
         self.connection = Connection.current()
@@ -50,5 +50,5 @@ class LVEntity(ABC, Generic[T, M]):
         try:
             self.value = self.lookup()
         except lv.libvirtError as e:
-            if e.get_error_code() not in NOT_FOUND:
+            if e.get_error_code() not in self.NOT_FOUND:
                 raise

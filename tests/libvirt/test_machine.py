@@ -28,12 +28,13 @@ from susa.libvirt import (
 from susa.recipes import Recipe
 from susa.recipes.session import Session
 from susa.utilities.generic import GIGA, wait_until
-from susa.utilities.networking import ping
+from susa.utilities.networking import ping, pings
 
 MACHINES = Path("/machines")
 MACHINE_MODEL = "susa.libvirt.machine_model.MachineModel"
 NETWORK_MODEL = "susa.libvirt.network_model.NetworkModel"
 VOLUME_MODEL = "susa.libvirt.volume_model.VolumeModel"
+SUBNET = "susa.utilities.networking.SubnetReservation"
 LV_NETWORK = "susa.libvirt.network.LVNetwork"
 LV_VOLUME = "susa.libvirt.volume.LVVolume"
 LV_MACHINE = "susa.libvirt.machine.LVMachine"
@@ -56,7 +57,12 @@ class Image:
             {"network": {"$ref": "network_model"}},
         ]
         return [
-            {"network_model": {NETWORK_MODEL: ["default", "ip"]}},
+            {"subnet": {SUBNET: {}}},
+            {
+                "network_model": {
+                    NETWORK_MODEL: ["default", {"ip": {"$ref": "subnet.address"}}]
+                }
+            },
             {"volume_model": {VOLUME_MODEL: [{"backing": str(path or self.path)}]}},
             {"machine_model": {MACHINE_MODEL: machine}},
             {"network": {LV_NETWORK: {"model": {"$ref": "network_model"}}}},
@@ -323,7 +329,7 @@ def test_power_cycle(machine: LVMachine, kind: str) -> None:
 
 def test_sniff(machine: LVMachine, network: LVNetwork) -> None:
     with network.sniffer() as sniffer:
-        ping(machine.ip, 3, timeout=5, interval=1)
+        pings(machine.ip, 3, timeout=5, interval=1)
     requests = [
         p
         for p in sniffer.packets()
@@ -351,7 +357,7 @@ def test_commit(
         ssh.check("echo committed > /root/susa-commit")
     # Cleanly, so the file system is written out.
     machine.shutdown()
-    wait_until(lambda _: not machine.is_powered_on, BOOT_TIMEOUT)
+    wait_until(lambda: not machine.is_powered_on, BOOT_TIMEOUT)
     volume.commit(committed)
     recipe = [*IMAGES[name].session(committed), {"ssh": COMMUNICATORS["ssh"]}]
     with Session.model_validate({"objects": recipe}) as session:

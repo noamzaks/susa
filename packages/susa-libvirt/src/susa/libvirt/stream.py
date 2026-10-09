@@ -8,11 +8,11 @@ import libvirt as lv
 from susa.core.stream import InputOutputStream
 from susa.utilities.generic import Deadline
 
-POLL_INTERVAL = 0.05
-CHUNK_SIZE = 1 << 16
-
 
 class LVStream(InputOutputStream):
+    POLL_INTERVAL = 0.05
+    CHUNK_SIZE = 1 << 16
+
     def __init__(self, conn: lv.virConnect) -> None:
         self.stream = conn.newStream(lv.VIR_STREAM_NONBLOCK)
         # libvirt fails reads after the end.
@@ -23,7 +23,7 @@ class LVStream(InputOutputStream):
         deadline = Deadline(timeout)
         while not self.eof:
             # -2 (despite its annotation) when there's nothing to read yet.
-            data: bytes | int = self.stream.recv(size or CHUNK_SIZE)
+            data: bytes | int = self.stream.recv(size or self.CHUNK_SIZE)
             if isinstance(data, bytes):
                 self.eof = not data
                 if data:
@@ -31,7 +31,7 @@ class LVStream(InputOutputStream):
             elif deadline.passed():
                 return b""
             else:
-                time.sleep(POLL_INTERVAL)
+                time.sleep(self.POLL_INTERVAL)
         raise EOFError
 
     @override
@@ -39,7 +39,7 @@ class LVStream(InputOutputStream):
         while data:
             sent = self.stream.send(data)
             if sent == -2:
-                time.sleep(POLL_INTERVAL)
+                time.sleep(self.POLL_INTERVAL)
                 continue
             data = data[sent:]
 

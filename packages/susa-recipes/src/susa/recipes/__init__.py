@@ -10,10 +10,10 @@ from collections.abc import Callable, Mapping
 from typing import Annotated, Any, Literal, Union
 
 import pydantic
-from pydantic.json_schema import SkipJsonSchema
 from typing_extensions import NotRequired, Self, TypedDict
 
 PACKAGES = {
+    "susa.utilities": ["susa.utilities.networking.SubnetReservation"],
     "susa.communicator": [
         "susa.communicator.serial.SerialCommunicator",
         "susa.communicator.ssh.SSHCommunicator",
@@ -97,8 +97,7 @@ def argument_type(annotation: Any) -> Any:
         if typing.get_origin(annotation) in (Union, types.UnionType)
         else (annotation,)
     )
-    json = [m if has_json_schema(m) else SkipJsonSchema[m] for m in members]  # type: ignore
-    return Union[(*json, Reference, "Recipe")]
+    return Union[(*filter(has_json_schema, members), Reference, "Recipe")]
 
 
 def has_json_schema(annotation: Any) -> bool:
@@ -141,20 +140,14 @@ def steps_type(cls: type[Any]) -> Any:
     return list[Annotated[step, validator]]
 
 
-def recipes_type(classes: Mapping[str, type[Any]]) -> Any:
-    # Never picked by `recipe_kind`.
-    if not classes:
-        return dict[str, Any]
-    recipes = []
-    for name, cls in classes.items():
-        recipe = steps_type(cls) if builders(cls) else arguments_type(cls.__init__)
-        recipe_type = typed_dict(f"{cls.__name__}Recipe", {name: recipe})
-        recipes.append(Annotated[recipe_type, pydantic.Tag(name)])
-    return Annotated[Union[tuple(recipes)], pydantic.Discriminator(single_key)]  # noqa: UP007
+def recipe_type(name: str, cls: type[Any]) -> Any:
+    recipe = steps_type(cls) if builders(cls) else arguments_type(cls.__init__)
+    recipe_type = typed_dict(f"{cls.__name__}Recipe", {name: recipe})
+    return Annotated[recipe_type, pydantic.Tag(name)]
 
 
 def typed_dict(name: str, fields: dict[str, Any]) -> Any:
-    config = pydantic.ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+    config = pydantic.ConfigDict(extra="forbid")
     return pydantic.with_config(config)(TypedDict(name, fields))  # type: ignore
 
 
@@ -162,13 +155,6 @@ def single_key(value: Any) -> str | None:
     if isinstance(value, dict) and len(value) == 1:
         return str(next(iter(value)))
     return None
-
-
-def recipe_kind(value: Any) -> str | None:
-    cls = CLASSES.get(single_key(value) or "")
-    if cls is None:
-        return None
-    return "builder" if builders(cls) else "constructor"
 
 
 def resolve(arguments: Mapping[str, Any], objects: Mapping[str, Any]) -> dict[str, Any]:
@@ -183,32 +169,19 @@ def resolve_value(value: Any, objects: Mapping[str, Any]) -> Any:
     return value
 
 
-class ConstructorRecipe(pydantic.RootModel[dict[str, Any]]):
-    root: recipes_type({n: c for n, c in CLASSES.items() if not builders(c)})  # type: ignore
-
-    def make(self, objects: Mapping[str, Any]) -> Any:
-        [(name, arguments)] = self.root.items()
-        return CLASSES[name](**resolve(arguments, objects))
-
-
-class BuilderRecipe(pydantic.RootModel[dict[str, Any]]):
-    root: recipes_type({n: c for n, c in CLASSES.items() if builders(c)})  # type: ignore
-
-    def make(self, objects: Mapping[str, Any]) -> Any:
-        [(name, steps)] = self.root.items()
-        result = CLASSES[name]()
-        for step in steps:
-            [(method, arguments)] = step.items()
-            getattr(result, method)(**resolve(arguments, objects))
-        return result
-
-
-class Recipe(pydantic.RootModel[ConstructorRecipe | BuilderRecipe]):
-    root: Annotated[
-        Annotated[ConstructorRecipe, pydantic.Tag("constructor")]
-        | Annotated[BuilderRecipe, pydantic.Tag("builder")],
-        pydantic.Discriminator(recipe_kind),
+class Recipe(pydantic.RootModel[dict[str, Any]]):
+    root: Annotated[  # type: ignore
+        Union[tuple(recipe_type(n, c) for n, c in CLASSES.items())],  # noqa: UP007
+        pydantic.Discriminator(single_key),
     ]
 
     def make(self, **objects: Any) -> Any:
-        return self.root.make(objects)
+        [(name, recipe)] = self.root.items()
+        cls = CLASSES[name]
+        if not builders(cls):
+            return cls(**resolve(recipe, objects))
+        result = cls()
+        for step in recipe:
+            [(method, arguments)] = step.items()
+            getattr(result, method)(**resolve(arguments, objects))
+        return result

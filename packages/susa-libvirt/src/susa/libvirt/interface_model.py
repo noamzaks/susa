@@ -6,10 +6,10 @@ from typing_extensions import Self
 from susa.libvirt.model import Model
 from susa.utilities.networking import random_mac
 
-QEMU_MAC_PREFIX = "52:54:00"
-
 
 class InterfaceModel(Model[lvdomain.devices_interface]):
+    QEMU_MAC_PREFIX = "52:54:00"
+
     def __init__(
         self,
         mac: str | None = None,
@@ -17,7 +17,7 @@ class InterfaceModel(Model[lvdomain.devices_interface]):
     ) -> None:
         self.xml_model = xml_model or lvdomain.devices_interface(
             type="network",
-            mac=lvdomain.mac(address=mac or random_mac(prefix=QEMU_MAC_PREFIX)),
+            mac=lvdomain.mac(address=mac or random_mac(prefix=self.QEMU_MAC_PREFIX)),
         )
 
     def mac(self, address: str) -> Self:

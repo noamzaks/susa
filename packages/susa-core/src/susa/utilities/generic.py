@@ -25,13 +25,13 @@ class Deadline:
 
 
 def wait_until(
-    test: Callable[[float | None], bool],
+    test: Callable[[], bool],
     timeout: float | None = None,
     interval: float = 0.1,
 ) -> None:
     deadline = Deadline(timeout)
     while not deadline.passed():
-        if test(deadline.remaining()):
+        if test():
             return
         time.sleep(interval)
     raise TimeoutError(f"Timed out after {timeout} seconds")

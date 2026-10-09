@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import fcntl
+import ipaddress
 import multiprocessing
 import re
 import subprocess
@@ -8,10 +10,9 @@ from concurrent.futures import ProcessPoolExecutor
 import pytest
 
 from susa.utilities.networking import (
-    SUBNETS,
-    free_subnet,
-    host_subnets,
+    SubnetReservation,
     ping,
+    pings,
     random_mac,
 )
 
@@ -21,12 +22,12 @@ def test_ping() -> None:
     assert isinstance(single, float)
 
     # The timeout is for the whole run.
-    multiple = ping("127.0.0.1", 3, timeout=5, interval=1)
+    multiple = pings("127.0.0.1", 3, timeout=5, interval=1)
     assert len(multiple) == 3
     assert all(isinstance(time, float) for time in multiple)
 
     # 10.255.255.1 is a non-routable address, so no replies should come back.
-    assert ping("10.255.255.1", 2) == [None, None]
+    assert pings("10.255.255.1", 2) == [None, None]
 
     with pytest.raises(subprocess.CalledProcessError):
         ping("nonexistent.invalid")
@@ -48,11 +49,39 @@ def test_random_mac_full_prefix() -> None:
     assert random_mac("52:54:00:12:34:56") == "52:54:00:12:34:56"
 
 
-def test_free_subnet() -> None:
-    subnet = free_subnet()
-    assert subnet.prefixlen == 24 and subnet.subnet_of(SUBNETS)
-    assert not any(subnet.overlaps(other) for other in host_subnets())
-    assert free_subnet() != subnet
+# Kept until the worker exits.
+def reserve() -> ipaddress.IPv4Network:
+    reservation = SubnetReservation()
+    reservation.create()
+    assert reservation.subnet is not None
+    return reservation.subnet
+
+
+def locks(index: int) -> bool:
+    try:
+        fcntl.lockf(
+            SubnetReservation.lock_file(), fcntl.LOCK_EX | fcntl.LOCK_NB, 1, index
+        )
+    except OSError:
+        return False
+    return True
+
+
+def test_subnet_reservation() -> None:
     with ProcessPoolExecutor(4, multiprocessing.get_context("spawn")) as pool:
-        subnets = {subnet, *(pool.submit(free_subnet).result() for _ in range(4))}
-    assert len(subnets) == 5
+        with SubnetReservation() as reservation:
+            subnet, index = reservation.subnet, reservation.index
+            assert subnet is not None and index is not None
+            assert subnet.prefixlen == 24 and subnet.subnet_of(
+                SubnetReservation.SUBNETS
+            )
+            assert not any(
+                subnet.overlaps(other) for other in SubnetReservation.host_subnets()
+            )
+            assert reservation.address == str(subnet.network_address + 1)
+            with SubnetReservation() as other:
+                assert other.subnet != subnet
+            subnets = {subnet, *(pool.submit(reserve).result() for _ in range(4))}
+            assert len(subnets) == 5
+            assert not pool.submit(locks, index).result()
+        assert pool.submit(locks, index).result()

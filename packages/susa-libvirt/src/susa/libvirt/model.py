@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from typing import Generic, TypeVar
 
 import pydantic_xml
-from typing_extensions import Self, override
+from typing_extensions import Self, get_original_bases, override
 
 T = TypeVar("T", bound=pydantic_xml.BaseXmlModel)
 
@@ -28,7 +28,7 @@ class Model(ABC, Generic[T]):
 
     @classmethod
     def xml_model_type(cls) -> type[T]:
-        [base] = cls.__orig_bases__  # type: ignore
+        [base] = get_original_bases(cls)
         [xml_model_type] = typing.get_args(base)
         return typing.cast("type[T]", xml_model_type)
 

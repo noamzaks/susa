@@ -19,13 +19,12 @@ from susa.core.communicator import (
 from susa.core.stream import InputStream, OutputStream
 from susa.utilities.generic import Deadline
 
-PRINTF_CHUNK_SIZE = 512
-WRITE_CHUNK_SIZE = 1 << 15
-POLL_INTERVAL = 0.2
-
 
 # gzip, tar and mktemp aren't in the Unix spec, but they're everywhere.
 class UnixCommunicator(AsyncCommandRunner, FileTransferrer):
+    PRINTF_CHUNK_SIZE = 512
+    WRITE_CHUNK_SIZE = 1 << 15
+
     def __init__(self, communicator: CommandRunner) -> None:
         self.communicator = communicator
         self.directory: str | None = None
@@ -105,8 +104,10 @@ class UnixCommunicator(AsyncCommandRunner, FileTransferrer):
         deadline = Deadline(timeout)
         compressed = gzip.compress(data)
         temporary = shlex.quote(self.temporary_file())
-        for i in range(0, len(compressed), WRITE_CHUNK_SIZE):
-            command = printf_command(compressed[i : i + WRITE_CHUNK_SIZE], temporary)
+        for i in range(0, len(compressed), self.WRITE_CHUNK_SIZE):
+            command = self.printf_command(
+                compressed[i : i + self.WRITE_CHUNK_SIZE], temporary
+            )
             self.communicator.check(command, deadline.remaining())
         self.communicator.check(
             f"gzip -dc < {temporary} > {shlex.quote(remote)} && rm {temporary}",
@@ -120,17 +121,16 @@ class UnixCommunicator(AsyncCommandRunner, FileTransferrer):
     def temporary_file(self) -> str:
         return self.communicator.check("mktemp").decode().strip()
 
-
-def printf_command(data: bytes, target: str) -> str:
-    return " &&\n".join(
-        "printf '"
-        + "".join(
-            chr(b) if chr(b).isalnum() and b < 128 else f"\\{b:03o}"
-            for b in data[i : i + PRINTF_CHUNK_SIZE]
+    def printf_command(self, data: bytes, target: str) -> str:
+        return " &&\n".join(
+            "printf '"
+            + "".join(
+                chr(b) if chr(b).isalnum() and b < 128 else f"\\{b:03o}"
+                for b in data[i : i + self.PRINTF_CHUNK_SIZE]
+            )
+            + f"' >> {target}"
+            for i in range(0, len(data), self.PRINTF_CHUNK_SIZE)
         )
-        + f"' >> {target}"
-        for i in range(0, len(data), PRINTF_CHUNK_SIZE)
-    )
 
 
 class UnixCommand(AsyncCommand):
@@ -196,7 +196,7 @@ class UnixInputStream(InputStream):
 
     @override
     def write(self, data: bytes) -> None:
-        self.unix.communicator.check(printf_command(data, self.path))
+        self.unix.communicator.check(self.unix.printf_command(data, self.path))
 
     @override
     def close(self) -> None:
@@ -207,6 +207,8 @@ class UnixInputStream(InputStream):
 
 
 class UnixOutputStream(OutputStream):
+    POLL_INTERVAL = 0.2
+
     def __init__(self, command: UnixCommand, path: str) -> None:
         self.command = command
         self.path = path
@@ -227,4 +229,4 @@ class UnixOutputStream(OutputStream):
                 raise EOFError
             if deadline.passed():
                 return b""
-            time.sleep(POLL_INTERVAL)
+            time.sleep(self.POLL_INTERVAL)

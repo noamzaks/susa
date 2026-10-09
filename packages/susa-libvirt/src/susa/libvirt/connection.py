@@ -20,7 +20,8 @@ class Connection:
 
     def __enter__(self) -> Self:
         assert self.conn is None
-        self.conn = open_connection(self.uri)
+        self.start_event_loop()
+        self.conn = lv.open(self.uri)
         Connection._open.append(self)
         return self
 
@@ -38,7 +39,7 @@ class Connection:
     @override
     def __reduce__(self) -> tuple[Any, ...]:
         assert self.conn is not None
-        return current_connection, (self.conn.getURI(),)
+        return Connection.current_to, (self.conn.getURI(),)
 
     @staticmethod
     def current() -> Connection:
@@ -46,27 +47,22 @@ class Connection:
             raise ValueError("There's no open libvirt connection!")
         return Connection._open[-1]
 
+    @staticmethod
+    def current_to(uri: str) -> Connection:
+        current = Connection.current()
+        # Sanity.
+        assert current.conn is not None and current.conn.getURI() == uri
+        return current
 
-def current_connection(uri: str) -> Connection:
-    current = Connection.current()
-    # Sanity.
-    assert current.conn is not None and current.conn.getURI() == uri
-    return current
+    # Streams (e.g. serial consoles) only receive data with an event loop, which has to be registered before
+    # connections are opened.
+    @staticmethod
+    @functools.cache
+    def start_event_loop() -> None:
+        lv.virEventRegisterDefaultImpl()
+        threading.Thread(target=Connection.run_event_loop, daemon=True).start()
 
-
-def open_connection(uri: str | None) -> lv.virConnect:
-    start_event_loop()
-    return lv.open(uri)
-
-
-# Streams (e.g. serial consoles) only receive data with an event loop, which has to be registered before connections
-# are opened.
-@functools.cache
-def start_event_loop() -> None:
-    lv.virEventRegisterDefaultImpl()
-    threading.Thread(target=run_event_loop, daemon=True).start()
-
-
-def run_event_loop() -> None:
-    while True:
-        lv.virEventRunDefaultImpl()
+    @staticmethod
+    def run_event_loop() -> None:
+        while True:
+            lv.virEventRunDefaultImpl()

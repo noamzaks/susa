@@ -20,28 +20,29 @@ from susa.libvirt import (
     VolumeModel,
 )
 from susa.utilities.generic import GIGA
+from susa.utilities.networking import SubnetReservation
 
-# A network on a free subnet, and a volume keeping the machine's changes off the image.
-network_model = NetworkModel().default().ip()
-volume_model = VolumeModel().backing("/machines/debian_x86_64.qcow2")
-machine_model = (
-    MachineModel()
-    .arch("x86_64")
-    .efi()
-    .default()
-    .memory(2 * GIGA)
-    .volume(volume_model)
-    .network(network_model)
-)
+with Connection("qemu:///system"), SubnetReservation() as subnet:
+    # A network on a free subnet, and a volume keeping the machine's changes off the image.
+    network_model = NetworkModel().default().ip(subnet.address)
+    volume_model = VolumeModel().backing("/machines/debian_x86_64.qcow2")
+    machine_model = (
+        MachineModel()
+        .arch("x86_64")
+        .efi()
+        .default()
+        .memory(2 * GIGA)
+        .volume(volume_model)
+        .network(network_model)
+    )
 
-with (
-    Connection("qemu:///system"),
-    LVNetwork(network_model),
-    LVVolume(volume_model),
-    LVMachine(machine_model) as machine,
-    SSHCommunicator(machine.ip, "root", "a") as ssh,
-):
-    print(ssh.check("uname -a"))
+    with (
+        LVNetwork(network_model),
+        LVVolume(volume_model),
+        LVMachine(machine_model) as machine,
+        SSHCommunicator(machine.ip, "root", "a") as ssh,
+    ):
+        print(ssh.check("uname -a"))
 ```
 
 The same can be a session: an array of named recipes in `objects`, each `{"<class>": recipe}` (the builder steps of a
@@ -55,7 +56,8 @@ can point at.
 {
   "$schema": "recipe.schema.json",
   "objects": [
-    {"network_model": {"susa.libvirt.network_model.NetworkModel": ["default", "ip"]}},
+    {"subnet": {"susa.utilities.networking.SubnetReservation": {}}},
+    {"network_model": {"susa.libvirt.network_model.NetworkModel": ["default", {"ip": {"$ref": "subnet.address"}}]}},
     {"volume_model": {"susa.libvirt.volume_model.VolumeModel": [{"backing": "/machines/debian_x86_64.qcow2"}]}},
     {"machine_model": {"susa.libvirt.machine_model.MachineModel": [
       {"arch": "x86_64"}, "efi", "default", {"memory": 2147483648},

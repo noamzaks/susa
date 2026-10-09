@@ -8,7 +8,6 @@ from typing_extensions import Self
 from susa.libvirt.interface_model import InterfaceModel
 from susa.libvirt.model import Model
 from susa.utilities.generic import random_id
-from susa.utilities.networking import free_subnet
 
 
 class NetworkModel(Model[lvnetwork.network]):
@@ -26,13 +25,10 @@ class NetworkModel(Model[lvnetwork.network]):
 
     def ip(
         self,
-        address: str | None = None,
+        address: str,
         netmask: str = "255.255.255.0",
         dhcp: bool = True,
     ) -> Self:
-        if address is None:
-            address = str(next(free_subnet().hosts()))
-
         ip = lvnetwork.ip(address=address, netmask=netmask)
         if dhcp:
             network = ipaddress.IPv4Network(f"{address}/{netmask}", strict=False)

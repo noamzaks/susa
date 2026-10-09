@@ -9,8 +9,6 @@ from subprocess import CalledProcessError, CompletedProcess
 import pytest
 from typing_extensions import override
 
-from susa.communicator import shell as shell_module
-from susa.communicator.login import ENTER
 from susa.communicator.process import ProcessStream
 from susa.communicator.shell import PexpectStream, Prelude, ShellCommunicator
 from susa.communicator.unix import UnixCommunicator
@@ -71,7 +69,7 @@ def test_shell_run(shell: LocalShell) -> None:
 
 def test_prelude() -> None:
     def prelude(stream: InputOutputStream) -> None:
-        stream.write(b"cd /tmp" + ENTER)
+        stream.write(b"cd /tmp" + ShellCommunicator.ENTER)
 
     with LocalShell(SHELLS["bash"], prelude) as shell:
         assert shell.run("pwd").stdout == b"/tmp\n"
@@ -168,8 +166,8 @@ def test_transfer_multiple(
 def test_discarded_input(
     discarded: int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(shell_module, "SETUP_ATTEMPT_TIMEOUT", 0.5)
-    monkeypatch.setattr(shell_module, "RECOVERY_QUIET_TIME", 0.1)
+    monkeypatch.setattr(ShellCommunicator, "SETUP_ATTEMPT_TIMEOUT", 0.5)
+    monkeypatch.setattr(ShellCommunicator, "RECOVERY_QUIET_TIME", 0.1)
     start = f"stty raw -echo; head -c {discarded} > /dev/null; stty sane"
     shell = LocalShell(
         ["sh", "-c", f"cd {tmp_path}; {start}; exec bash --norc --noprofile -i"]
