@@ -3,9 +3,11 @@ from __future__ import annotations
 import fcntl
 import ipaddress
 import multiprocessing
+import os
 import re
 import subprocess
 from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
 
 import pytest
 
@@ -58,10 +60,9 @@ def reserve() -> ipaddress.IPv4Network:
 
 
 def locks(index: int) -> bool:
+    lock = os.open(SubnetReservation.LOCK, os.O_RDWR)
     try:
-        fcntl.lockf(
-            SubnetReservation.lock_file(), fcntl.LOCK_EX | fcntl.LOCK_NB, 1, index
-        )
+        fcntl.lockf(lock, fcntl.LOCK_EX | fcntl.LOCK_NB, 1, index)
     except OSError:
         return False
     return True
@@ -72,12 +73,10 @@ def test_subnet_reservation() -> None:
         with SubnetReservation() as reservation:
             subnet, index = reservation.subnet, reservation.index
             assert subnet is not None and index is not None
-            assert subnet.prefixlen == 24 and subnet.subnet_of(
-                SubnetReservation.SUBNETS
-            )
-            assert not any(
-                subnet.overlaps(other) for other in SubnetReservation.host_subnets()
-            )
+            assert subnet.prefixlen == 24
+            assert subnet.subnet_of(SubnetReservation.SUBNETS)
+            used = reservation.host_subnets()
+            assert not any(subnet.overlaps(other) for other in used)
             assert reservation.address == str(subnet.network_address + 1)
             with SubnetReservation() as other:
                 assert other.subnet != subnet
@@ -85,3 +84,27 @@ def test_subnet_reservation() -> None:
             assert len(subnets) == 5
             assert not pool.submit(locks, index).result()
         assert pool.submit(locks, index).result()
+
+
+def test_subnet_reservation_lock(tmp_path: Path) -> None:
+    with (
+        SubnetReservation(tmp_path / "a") as a,
+        SubnetReservation(tmp_path / "b") as b,
+        SubnetReservation(tmp_path / "a") as other,
+    ):
+        assert a.subnet == b.subnet != other.subnet
+
+
+def test_subnet_reservation_lock_variable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(SubnetReservation.LOCK_VARIABLE, str(tmp_path / "lock"))
+    with SubnetReservation():
+        assert (tmp_path / "lock").exists()
+
+
+def test_subnet_reservation_closes_lock(tmp_path: Path) -> None:
+    lock = tmp_path / "lock"
+    with SubnetReservation(lock), SubnetReservation(lock):
+        assert lock in SubnetReservation.FILES
+    assert lock not in SubnetReservation.FILES

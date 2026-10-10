@@ -11,6 +11,7 @@ members = [
     "susa-communicator",
     "susa-core",
     "susa-libvirt",
+    "susa-podman",
     "susa-recipes",
     "susa-workspace",
 ]
@@ -929,6 +930,21 @@ requires-dist = [
 ]
 
 [[package]]
+name = "susa-podman"
+version = "0.1.0"
+source = { editable = "packages/susa-podman" }
+dependencies = [
+    { name = "susa-core" },
+    { name = "typing-extensions" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "susa-core", editable = "packages/susa-core" },
+    { name = "typing-extensions", specifier = ">=4.16.0" },
+]
+
+[[package]]
 name = "susa-recipes"
 version = "0.1.0"
 source = { editable = "packages/susa-recipes" }
@@ -945,6 +961,9 @@ communicator = [
 libvirt = [
     { name = "susa-libvirt" },
 ]
+podman = [
+    { name = "susa-podman" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -952,9 +971,10 @@ requires-dist = [
     { name = "susa-communicator", marker = "extra == 'communicator'", editable = "packages/susa-communicator" },
     { name = "susa-core", editable = "packages/susa-core" },
     { name = "susa-libvirt", marker = "extra == 'libvirt'", editable = "packages/susa-libvirt" },
+    { name = "susa-podman", marker = "extra == 'podman'", editable = "packages/susa-podman" },
     { name = "typing-extensions", specifier = ">=4.16.0" },
 ]
-provides-extras = ["communicator", "libvirt"]
+provides-extras = ["communicator", "libvirt", "podman"]
 
 [[package]]
 name = "susa-workspace"
@@ -964,7 +984,8 @@ dependencies = [
     { name = "susa-communicator" },
     { name = "susa-core" },
     { name = "susa-libvirt" },
-    { name = "susa-recipes", extra = ["communicator", "libvirt"] },
+    { name = "susa-podman" },
+    { name = "susa-recipes", extra = ["communicator", "libvirt", "podman"] },
 ]
 
 [package.dev-dependencies]
@@ -986,7 +1007,8 @@ requires-dist = [
     { name = "susa-communicator", editable = "packages/susa-communicator" },
     { name = "susa-core", editable = "packages/susa-core" },
     { name = "susa-libvirt", editable = "packages/susa-libvirt" },
-    { name = "susa-recipes", extras = ["communicator", "libvirt"], editable = "packages/susa-recipes" },
+    { name = "susa-podman", editable = "packages/susa-podman" },
+    { name = "susa-recipes", extras = ["communicator", "libvirt", "podman"], editable = "packages/susa-recipes" },
 ]
 
 [package.metadata.requires-dev]

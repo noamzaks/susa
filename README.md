@@ -85,3 +85,21 @@ debian = Session.model_validate_json(Path("debian.json").read_text())
 with Connection("qemu:///system"), debian:
     print(debian.get("ssh", SSHCommunicator).check("uname -a"))
 ```
+
+### In a container
+
+`susa.podman.container.LibvirtContainer` runs libvirt in a rootless podman container (building its image the first
+time), whose user and network namespaces the process joins when it's created. Everything else stays as it is, with the
+machines' network reachable from the process and what it runs, and connections defaulting to it (through
+`LIBVIRT_DEFAULT_URI`). It has to be created while the process has no other threads (e.g. while no `Connection` is
+open), and the process stays in its namespaces afterwards (so there can be one per process). Podman keeps working,
+through a service the container starts.
+
+```python
+from susa.communicator.ssh import SSHCommunicator
+from susa.libvirt import Connection
+from susa.podman.container import LibvirtContainer
+
+with LibvirtContainer(mounts=["/machines"]), Connection():
+    ...  # As above.
+```

@@ -16,6 +16,8 @@ from susa.core.stream import InputOutputStream
 # ssh reads passwords from the terminal only after prompting, so sshpass gives them.
 class SSHCommunicator(ShellCommunicator, FileTransferrer):
     OPTIONS = (
+        # No configuration files (which, e.g. in a container's user namespace, may not even be usable).
+        "-Fnone",
         "-oStrictHostKeyChecking=no",
         "-oUserKnownHostsFile=/dev/null",
         "-oLogLevel=ERROR",

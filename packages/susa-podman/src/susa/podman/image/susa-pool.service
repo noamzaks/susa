@@ -1,0 +1,10 @@
+[Unit]
+Description=The default storage pool
+After=virtstoraged.socket
+
+[Service]
+Type=oneshot
+ExecStart=virsh -c storage:///system pool-create-as default dir --target /var/lib/libvirt/images
+
+[Install]
+WantedBy=multi-user.target

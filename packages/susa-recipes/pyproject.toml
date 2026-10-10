@@ -16,6 +16,7 @@ dependencies = [
 [project.optional-dependencies]
 communicator = ["susa-communicator"]
 libvirt = ["susa-libvirt"]
+podman = ["susa-podman"]
 
 [build-system]
 requires = ["uv_build>=0.11.7,<0.12.0"]
@@ -28,3 +29,4 @@ module-name = "susa.recipes"
 susa-core = { workspace = true }
 susa-communicator = { workspace = true }
 susa-libvirt = { workspace = true }
+susa-podman = { workspace = true }

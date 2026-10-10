@@ -32,6 +32,7 @@ PACKAGES = {
         "susa.libvirt.volume.LVVolume",
         "susa.libvirt.machine.LVMachine",
     ],
+    "susa.podman": ["susa.podman.container.LibvirtContainer"],
 }
 
 

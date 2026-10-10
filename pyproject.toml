@@ -7,7 +7,8 @@ dependencies = [
     "susa-core",
     "susa-communicator",
     "susa-libvirt",
-    "susa-recipes[communicator,libvirt]",
+    "susa-podman",
+    "susa-recipes[communicator,libvirt,podman]",
 ]
 
 [tool.uv]
@@ -20,6 +21,7 @@ members = ["packages/*"]
 susa-core = { workspace = true }
 susa-communicator = { workspace = true }
 susa-libvirt = { workspace = true }
+susa-podman = { workspace = true }
 susa-recipes = { workspace = true }
 pydantic-libvirt = { git = "https://github.com/noamzaks/pydantic-libvirt" }
 
@@ -27,7 +29,7 @@ pydantic-libvirt = { git = "https://github.com/noamzaks/pydantic-libvirt" }
 strict = true
 files = ["packages/*/src", "tests"]
 explicit_package_bases = true
-mypy_path = ["packages/susa-core/src", "packages/susa-communicator/src", "packages/susa-libvirt/src", "packages/susa-recipes/src"]
+mypy_path = ["packages/susa-core/src", "packages/susa-communicator/src", "packages/susa-libvirt/src", "packages/susa-podman/src", "packages/susa-recipes/src"]
 enable_error_code = ["explicit-override"]
 # Abstract classes can be asked for (e.g. `cook(recipe, ShellCommunicator)`), as `isinstance` checks them.
 disable_error_code = ["type-abstract"]

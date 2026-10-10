@@ -7,18 +7,19 @@ around libvirt/QEMU virtual machines of many architectures.
 
 - `uv sync`, `uv run ruff check`, `uv run ruff format`, `uv run mypy` (strict).
 - What CI runs: `uv run pre-commit run --all-files`.
-- Fast tests: `uv run pytest --ignore tests/libvirt/test_machine.py`.
+- Fast tests: `uv run pytest --ignore tests/libvirt/test_machine.py --ignore tests/podman`.
 - Update XML snapshots after an intended model change: `uv run pytest tests/libvirt/test_models.py --snapshot-update`,
   then re-run without the flag and review the diff.
-- Real-VM tests: `uv run pytest tests/libvirt/test_machine.py -n 3` (more workers starve the host and time out).
+- Real-VM tests: `uv run pytest tests/libvirt/test_machine.py -n 3` (more workers starve the host and time out), and
+  `uv run pytest tests/podman` (builds the container's image the first time).
 
 ## Design
 
 - **Layers.** `susa.core` holds backend-independent contracts (abstract classes) only. `susa.libvirt` implements them,
-  `susa.communicator` runs commands over any stream, `susa.recipes` makes objects from JSON, and `susa.utilities` holds
-  general helpers. Each is its own distribution in the uv workspace under `packages/` (`susa-core` holds core and
-  utilities), sharing the `susa` namespace package (so there's no `susa/__init__.py`), and depends only on those below
-  it: core, then communicator and libvirt, then recipes.
+  `susa.communicator` runs commands over any stream, `susa.podman` runs libvirt in a container, `susa.recipes` makes
+  objects from JSON, and `susa.utilities` holds general helpers. Each is its own distribution in the uv workspace under
+  `packages/` (`susa-core` holds core and utilities), sharing the `susa` namespace package (so there's no
+  `susa/__init__.py`), and depends only on those below it: core, then communicator, libvirt and podman, then recipes.
 - **Bottom up.** Parts are small and independent (models, entities, communicators), each can be a JSON recipe, and they
   connect directly (e.g. `machine.network(network)`, `SSHCommunicator(machine, ...)`, `{"$ref": "machine"}`).
   Conveniences are opt-in, generic and composable (e.g. `Session`); nothing imposes a layout or an orchestration.

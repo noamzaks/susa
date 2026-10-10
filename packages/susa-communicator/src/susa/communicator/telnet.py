@@ -22,5 +22,6 @@ class TelnetCommunicator(ShellCommunicator):
 
     @override
     def open_stream(self) -> InputOutputStream:
-        # 8-bit clean, with no escape character (which would otherwise be intercepted in the data).
-        return ProcessStream("telnet", "-8", "-E", self.host, str(self.port))
+        # 8-bit clean, with no escape character (which would otherwise be intercepted in the data), and without
+        # ~/.telnetrc.
+        return ProcessStream("telnet", "-8", "-E", "-c", self.host, str(self.port))

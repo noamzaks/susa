@@ -1,0 +1,13 @@
+FROM registry.fedoraproject.org/fedora:44
+RUN dnf install -y --setopt=install_weak_deps=False \
+        systemd libvirt-daemon-driver-qemu libvirt-daemon-driver-network libvirt-daemon-driver-storage-core \
+        libvirt-daemon-log libvirt-client \
+        qemu-system-x86-core qemu-system-aarch64-core qemu-system-arm-core qemu-system-mips-core \
+        qemu-system-ppc-core qemu-system-riscv-core qemu-img \
+        qemu-device-display-virtio-gpu qemu-device-display-virtio-gpu-pci qemu-device-display-virtio-vga \
+        edk2-ovmf edk2-aarch64 seabios-bin SLOF dnsmasq nftables \
+    && dnf clean all
+COPY qemu.conf /etc/libvirt/
+COPY susa-pool.service /etc/systemd/system/
+RUN systemctl enable virtqemud.socket virtnetworkd.socket virtstoraged.socket virtlogd.socket susa-pool.service
+CMD ["/sbin/init"]
