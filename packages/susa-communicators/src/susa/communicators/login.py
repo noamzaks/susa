@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from susa.communicator.shell import ShellCommunicator
+from susa.communicators.shell import ShellCommunicator
 from susa.core.stream import InputOutputStream
 
 
@@ -19,5 +19,5 @@ class Login:
         for line in [self.username, self.password]:
             if line is None:
                 continue
-            stream.wait_until_quiet(self.quiet_time, self.QUIET_TIMEOUT)
+            stream.wait_until_quiet(self.quiet_time, Login.QUIET_TIMEOUT)
             stream.write(line.encode() + ShellCommunicator.ENTER)

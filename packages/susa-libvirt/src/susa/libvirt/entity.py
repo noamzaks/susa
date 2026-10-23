@@ -50,5 +50,5 @@ class LVEntity(ABC, Generic[T, M]):
         try:
             self.value = self.lookup()
         except lv.libvirtError as e:
-            if e.get_error_code() not in self.NOT_FOUND:
+            if e.get_error_code() not in LVEntity.NOT_FOUND:
                 raise

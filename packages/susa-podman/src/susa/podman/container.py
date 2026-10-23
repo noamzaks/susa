@@ -1,90 +1,87 @@
 from __future__ import annotations
 
+import contextlib
+import json
 import os
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 
 from typing_extensions import override
 
+from susa.communicators.container import ContainerCommunicator
+from susa.core.communicator import HOST
 from susa.core.resource import Resource
+from susa.libvirt.connection import Connection
 from susa.utilities.generic import random_id, wait_until
-from susa.utilities.namespaces import join_namespaces
 from susa.utilities.networking import SubnetReservation
 
 
-# libvirt in a rootless container, whose user and network namespaces this process joins (for good) when it's created,
-# so that what it runs (e.g. ssh) reaches the machines. Until it's destroyed, connections (and subnet reservations)
-# default to it, and podman keeps working through a service of its own.
+# libvirt in a rootless container (of the image, built if it's missing). Until it's destroyed, connections default to it,
+# and commands that run on the host (e.g. ssh's) run in its network, where they reach its machines. So do those of
+# processes started meanwhile, through the environment.
 class LibvirtContainer(Resource):
-    IMAGE = "localhost/susa-libvirt"
     CONTEXT = Path(__file__).parent / "image"
-    START_TIMEOUT = 60
 
-    def __init__(self, mounts: Sequence[str] = ()) -> None:
+    def __init__(
+        self,
+        mounts: Sequence[str] = (),
+        image: str = "susa-libvirt",
+        start_timeout: float = 60,
+    ) -> None:
         self.mounts = list(mounts)
+        self.image = image
+        self.start_timeout = start_timeout
         self.name = f"susa-{random_id(10)}"
         self.directory: Path | None = None
-        self.service: subprocess.Popen[bytes] | None = None
-        self.saved: dict[str, str | None] = {}
+        self.defaults = contextlib.ExitStack()
 
     @override
     def create(self) -> None:
         assert self.directory is None
-        directory = self.directory = Path(tempfile.mkdtemp(prefix="susa-"))
-        (directory / "libvirt").mkdir()
-        if subprocess.run(
-            ["podman", "image", "exists", self.IMAGE], check=False
-        ).returncode:
-            subprocess.run(
-                ["podman", "build", "-t", self.IMAGE, self.CONTEXT], check=True
-            )
-        environment = self.environment()
-        service = [
-            "podman",
-            "system",
-            "service",
-            "--time=0",
-            environment["CONTAINER_HOST"],
-        ]
-        self.service = subprocess.Popen(service)
-        self.podman("run", "--detach", "--rm", *self.options(), self.IMAGE)
+        self.directory = Path(tempfile.mkdtemp(prefix="susa-"))
+        socket = self.directory / "libvirt/virtqemud-sock"
+        socket.parent.mkdir()
+        if self.podman("image", "exists", self.image, check=False).returncode:
+            build = [
+                "podman",
+                "build",
+                "--tag",
+                self.image,
+                str(LibvirtContainer.CONTEXT),
+            ]
+            subprocess.run(build, check=True)
+        self.podman("run", "--detach", "--rm", *self.options(), self.image)
         # Systemd creates the socket, and then the rest of booting can be waited for. It exits with an error when
         # booting finished with a failed unit ("degraded") too.
-        wait_until((directory / "libvirt/virtqemud-sock").exists, self.START_TIMEOUT)
+        wait_until(socket.exists, self.start_timeout)
         self.podman(
             "exec", self.name, "systemctl", "is-system-running", "--wait", check=False
         )
-        wait_until((directory / "podman.sock").exists, self.START_TIMEOUT)
-        pid = self.podman("inspect", "--format", "{{.State.Pid}}", self.name)
-        join_namespaces(int(pid), "user", "net")
-        self.saved = {name: os.environ.get(name) for name in environment}
-        os.environ.update(environment)
+        pid = self.pid()
+        uri = f"qemu+unix:///system?socket={socket}"
+        lock = self.directory / "subnets.lock"
+        self.defaults.enter_context(HOST.set(ContainerCommunicator(pid)))
+        self.defaults.enter_context(Connection.URI.set(uri))
+        self.defaults.enter_context(SubnetReservation.LOCK.set(lock))
+        cls = ContainerCommunicator
+        host = {f"{cls.__module__}.{cls.__qualname__}": {"pid": pid}}
+        environment = {
+            "SUSA_SESSION": json.dumps({"objects": [{"host": host}]}),
+            "LIBVIRT_DEFAULT_URI": uri,
+            "SUSA_SUBNETS_LOCK": str(lock),
+        }
+        self.defaults.enter_context(self.environment(environment))
 
     @override
     def destroy(self) -> None:
-        assert self.directory is not None and self.service is not None
-        self.podman("rm", "--force", "--time=0", self.name)
-        self.service.terminate()
-        self.service.wait()
-        for name, value in self.saved.items():
-            if value is None:
-                del os.environ[name]
-            else:
-                os.environ[name] = value
-        shutil.rmtree(self.directory)
-        self.directory, self.service, self.saved = None, None, {}
-
-    def environment(self) -> dict[str, str]:
         assert self.directory is not None
-        socket = self.directory / "libvirt/virtqemud-sock"
-        return {
-            "CONTAINER_HOST": f"unix://{self.directory}/podman.sock",
-            "LIBVIRT_DEFAULT_URI": f"qemu+unix:///system?socket={socket}",
-            SubnetReservation.LOCK_VARIABLE: str(self.directory / "subnets.lock"),
-        }
+        self.defaults.close()
+        self.podman("rm", "--force", "--time=0", self.name)
+        shutil.rmtree(self.directory)
+        self.directory = None
 
     def options(self) -> list[str]:
         assert self.directory is not None
@@ -101,8 +98,28 @@ class LibvirtContainer(Resource):
             *(f"--volume={mount}:{mount}" for mount in self.mounts),
         ]
 
-    def podman(self, *args: str, check: bool = True) -> str:
-        result = subprocess.run(
+    def pid(self) -> int:
+        return int(
+            self.podman("inspect", "--format", "{{.State.Pid}}", self.name).stdout
+        )
+
+    @staticmethod
+    @contextlib.contextmanager
+    def environment(variables: Mapping[str, str]) -> Iterator[None]:
+        previous = {name: os.environ.get(name) for name in variables}
+        os.environ.update(variables)
+        try:
+            yield
+        finally:
+            for name, value in previous.items():
+                if value is None:
+                    del os.environ[name]
+                else:
+                    os.environ[name] = value
+
+    def podman(
+        self, *args: str, check: bool = True
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
             ["podman", *args], check=check, capture_output=True, text=True
         )
-        return result.stdout.strip()

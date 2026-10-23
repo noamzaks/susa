@@ -14,7 +14,7 @@ dependencies = [
 
 # The packages whose classes recipes can make.
 [project.optional-dependencies]
-communicator = ["susa-communicator"]
+communicators = ["susa-communicators"]
 libvirt = ["susa-libvirt"]
 podman = ["susa-podman"]
 
@@ -27,6 +27,6 @@ module-name = "susa.recipes"
 
 [tool.uv.sources]
 susa-core = { workspace = true }
-susa-communicator = { workspace = true }
+susa-communicators = { workspace = true }
 susa-libvirt = { workspace = true }
 susa-podman = { workspace = true }

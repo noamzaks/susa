@@ -201,7 +201,7 @@ class MachineModel(Model[lvdomain.domain]):
         disks = self.get_devices().disk_list
         assert disks is not None
 
-        prefix = self.BUS_PREFIXES.get(bus, "sd") if bus is not None else "sd"
+        prefix = MachineModel.BUS_PREFIXES.get(bus, "sd") if bus is not None else "sd"
         suffix = ""
         index = len(disks) + 1
         while index > 0:

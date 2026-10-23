@@ -17,7 +17,9 @@ class InterfaceModel(Model[lvdomain.devices_interface]):
     ) -> None:
         self.xml_model = xml_model or lvdomain.devices_interface(
             type="network",
-            mac=lvdomain.mac(address=mac or random_mac(prefix=self.QEMU_MAC_PREFIX)),
+            mac=lvdomain.mac(
+                address=mac or random_mac(prefix=InterfaceModel.QEMU_MAC_PREFIX)
+            ),
         )
 
     def mac(self, address: str) -> Self:

@@ -23,7 +23,7 @@ class LVStream(InputOutputStream):
         deadline = Deadline(timeout)
         while not self.eof:
             # -2 (despite its annotation) when there's nothing to read yet.
-            data: bytes | int = self.stream.recv(size or self.CHUNK_SIZE)
+            data: bytes | int = self.stream.recv(size or LVStream.CHUNK_SIZE)
             if isinstance(data, bytes):
                 self.eof = not data
                 if data:
@@ -31,7 +31,7 @@ class LVStream(InputOutputStream):
             elif deadline.passed():
                 return b""
             else:
-                time.sleep(self.POLL_INTERVAL)
+                time.sleep(LVStream.POLL_INTERVAL)
         raise EOFError
 
     @override
@@ -39,7 +39,7 @@ class LVStream(InputOutputStream):
         while data:
             sent = self.stream.send(data)
             if sent == -2:
-                time.sleep(self.POLL_INTERVAL)
+                time.sleep(LVStream.POLL_INTERVAL)
                 continue
             data = data[sent:]
 

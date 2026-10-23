@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import fcntl
 import ipaddress
+import json
 import multiprocessing
 import os
 import re
 import subprocess
+import sys
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import pytest
+from typing_extensions import override
 
+from susa.core.communicator import HOST, HostAsyncCommandRunner
 from susa.utilities.networking import (
     SubnetReservation,
     ping,
@@ -27,6 +31,9 @@ def test_ping() -> None:
     multiple = pings("127.0.0.1", 3, timeout=5, interval=1)
     assert len(multiple) == 3
     assert all(isinstance(time, float) for time in multiple)
+    # The replies until the timeout.
+    partial = pings("127.0.0.1", 5, timeout=2.5, interval=1)
+    assert [time is not None for time in partial] == [True] * 3 + [False] * 2
 
     # 10.255.255.1 is a non-routable address, so no replies should come back.
     assert pings("10.255.255.1", 2) == [None, None]
@@ -60,7 +67,7 @@ def reserve() -> ipaddress.IPv4Network:
 
 
 def locks(index: int) -> bool:
-    lock = os.open(SubnetReservation.LOCK, os.O_RDWR)
+    lock = os.open(SubnetReservation.LOCK.get(), os.O_RDWR)
     try:
         fcntl.lockf(lock, fcntl.LOCK_EX | fcntl.LOCK_NB, 1, index)
     except OSError:
@@ -74,10 +81,10 @@ def test_subnet_reservation() -> None:
             subnet, index = reservation.subnet, reservation.index
             assert subnet is not None and index is not None
             assert subnet.prefixlen == 24
-            assert subnet.subnet_of(SubnetReservation.SUBNETS)
+            assert subnet.subnet_of(reservation.subnets)
             used = reservation.host_subnets()
             assert not any(subnet.overlaps(other) for other in used)
-            assert reservation.address == str(subnet.network_address + 1)
+            assert reservation.ip == str(subnet.network_address + 1)
             with SubnetReservation() as other:
                 assert other.subnet != subnet
             subnets = {subnet, *(pool.submit(reserve).result() for _ in range(4))}
@@ -88,23 +95,54 @@ def test_subnet_reservation() -> None:
 
 def test_subnet_reservation_lock(tmp_path: Path) -> None:
     with (
-        SubnetReservation(tmp_path / "a") as a,
-        SubnetReservation(tmp_path / "b") as b,
-        SubnetReservation(tmp_path / "a") as other,
+        SubnetReservation(lock=tmp_path / "a") as a,
+        SubnetReservation(lock=tmp_path / "b") as b,
+        SubnetReservation(lock=tmp_path / "a") as other,
     ):
         assert a.subnet == b.subnet != other.subnet
+    with SubnetReservation.LOCK.set(tmp_path / "c"), SubnetReservation():
+        assert (tmp_path / "c").exists()
 
 
-def test_subnet_reservation_lock_variable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv(SubnetReservation.LOCK_VARIABLE, str(tmp_path / "lock"))
-    with SubnetReservation():
-        assert (tmp_path / "lock").exists()
+# The same subnet's byte, whichever subnets it's of.
+def test_subnet_reservation_subnets(tmp_path: Path) -> None:
+    lock = tmp_path / "lock"
+    with SubnetReservation(Routes(), lock, "10.200.0.0/16") as wide:
+        assert wide.subnet == ipaddress.IPv4Network("10.200.0.0/24")
+        with pytest.raises(RuntimeError):
+            SubnetReservation(Routes(), lock, "10.200.0.0/24").create()
+
+
+def test_subnet_reservation_lock_environment(tmp_path: Path) -> None:
+    environment = {**os.environ, "SUSA_SUBNETS_LOCK": str(tmp_path / "lock")}
+    code = "from susa.utilities.networking import SubnetReservation as S; print(S.LOCK.get())"
+    output = subprocess.check_output([sys.executable, "-c", code], env=environment)
+    assert output.decode().strip() == str(tmp_path / "lock")
 
 
 def test_subnet_reservation_closes_lock(tmp_path: Path) -> None:
     lock = tmp_path / "lock"
-    with SubnetReservation(lock), SubnetReservation(lock):
+    with SubnetReservation(lock=lock), SubnetReservation(lock=lock):
         assert lock in SubnetReservation.FILES
     assert lock not in SubnetReservation.FILES
+
+
+class Routes(HostAsyncCommandRunner):
+    def __init__(self, *destinations: str) -> None:
+        self.destinations = destinations
+
+    @override
+    def run(
+        self, command: str, timeout: float | None = None
+    ) -> subprocess.CompletedProcess[bytes]:
+        routes = json.dumps([{"dst": destination} for destination in self.destinations])
+        return subprocess.CompletedProcess(command, 0, routes.encode())
+
+
+def test_subnet_reservation_host(tmp_path: Path) -> None:
+    host = Routes("10.0.0.0/9", "default")
+    first = ipaddress.IPv4Network("10.128.0.0/24")
+    with SubnetReservation(host, tmp_path / "a") as reservation:
+        assert reservation.subnet == first
+    with HOST.set(host), SubnetReservation(lock=tmp_path / "b") as reservation:
+        assert reservation.subnet == first

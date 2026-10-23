@@ -14,12 +14,13 @@ from typing_extensions import NotRequired, Self, TypedDict
 
 PACKAGES = {
     "susa.utilities": ["susa.utilities.networking.SubnetReservation"],
-    "susa.communicator": [
-        "susa.communicator.serial.SerialCommunicator",
-        "susa.communicator.ssh.SSHCommunicator",
-        "susa.communicator.telnet.TelnetCommunicator",
-        "susa.communicator.rlogin.RloginCommunicator",
-        "susa.communicator.unix.UnixCommunicator",
+    "susa.communicators": [
+        "susa.communicators.serial.SerialCommunicator",
+        "susa.communicators.ssh.SSHCommunicator",
+        "susa.communicators.telnet.TelnetCommunicator",
+        "susa.communicators.rlogin.RloginCommunicator",
+        "susa.communicators.unix.UnixCommunicator",
+        "susa.communicators.container.ContainerCommunicator",
     ],
     "susa.libvirt": [
         "susa.libvirt.machine_model.MachineModel",
@@ -32,7 +33,9 @@ PACKAGES = {
         "susa.libvirt.volume.LVVolume",
         "susa.libvirt.machine.LVMachine",
     ],
-    "susa.podman": ["susa.podman.container.LibvirtContainer"],
+    "susa.podman": [
+        "susa.podman.container.LibvirtContainer",
+    ],
 }
 
 

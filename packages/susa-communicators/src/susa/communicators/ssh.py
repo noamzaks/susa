@@ -1,22 +1,25 @@
 from __future__ import annotations
 
-import os
-import subprocess
+import shlex
 from pathlib import Path
 from typing import Literal
 
 from typing_extensions import override
 
-from susa.communicator.process import ProcessStream
-from susa.communicator.shell import ShellCommunicator
-from susa.core.communicator import FileTransferrer
+from susa.communicators.shell import ShellCommunicator
+from susa.core.communicator import (
+    HOST,
+    AsyncCommandRunner,
+    AsyncCommandStream,
+    FileTransferrer,
+)
 from susa.core.stream import InputOutputStream
 
 
 # ssh reads passwords from the terminal only after prompting, so sshpass gives them.
 class SSHCommunicator(ShellCommunicator, FileTransferrer):
     OPTIONS = (
-        # No configuration files (which, e.g. in a container's user namespace, may not even be usable).
+        # No configuration files (e.g. the user's).
         "-Fnone",
         "-oStrictHostKeyChecking=no",
         "-oUserKnownHostsFile=/dev/null",
@@ -25,54 +28,49 @@ class SSHCommunicator(ShellCommunicator, FileTransferrer):
 
     def __init__(
         self,
-        host: str,
+        ip: str,
         username: str,
         password: str | None = None,
         port: int = 22,
         file_transfer: Literal["sftp", "scp"] = "sftp",
+        host: AsyncCommandRunner | None = None,
     ) -> None:
         super().__init__()
-        self.host = host
+        self.ip = ip
         self.username = username
         self.password = password
         self.port = port
         self.file_transfer = file_transfer
+        self.host = host or HOST.get()
 
     @override
     def open_stream(self) -> InputOutputStream:
-        command = self.command(
-            "ssh", "-tt", f"-p{self.port}", f"{self.username}@{self.host}"
+        login = f"{self.username}@{self.ip}"
+        return AsyncCommandStream(
+            self.host.start(self.command("ssh", "-tt", f"-p{self.port}", login))
         )
-        return ProcessStream(*command, env=self.environment())
 
     @override
     def upload_single(
         self, local: Path, remote: str, timeout: float | None = None
     ) -> None:
-        self.scp(str(local), f"{self.username}@{self.host}:{remote}", timeout)
+        self.scp(str(local), f"{self.username}@{self.ip}:{remote}", timeout)
 
     @override
     def download_single(
         self, remote: str, local: Path, timeout: float | None = None
     ) -> None:
-        self.scp(f"{self.username}@{self.host}:{remote}", str(local), timeout)
+        self.scp(f"{self.username}@{self.ip}:{remote}", str(local), timeout)
 
     def scp(self, source: str, destination: str, timeout: float | None) -> None:
         protocol = "-s" if self.file_transfer == "sftp" else "-O"
-        subprocess.run(
-            self.command("scp", "-q", protocol, f"-P{self.port}", source, destination),
-            env=self.environment(),
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            check=True,
-            timeout=timeout,
+        command = self.command(
+            "scp", "-q", protocol, f"-P{self.port}", source, destination
         )
+        self.host.check(command, timeout)
 
-    def command(self, program: str, *args: str) -> list[str]:
-        sshpass = [] if self.password is None else ["sshpass", "-e"]
-        return [*sshpass, program, *self.OPTIONS, *args]
-
-    def environment(self) -> dict[str, str]:
+    def command(self, program: str, *args: str) -> str:
+        command = shlex.join([program, *SSHCommunicator.OPTIONS, *args])
         if self.password is None:
-            return dict(os.environ)
-        return {**os.environ, "SSHPASS": self.password}
+            return command
+        return f"SSHPASS={shlex.quote(self.password)} sshpass -e {command}"

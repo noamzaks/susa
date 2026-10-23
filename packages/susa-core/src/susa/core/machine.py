@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ from typing import TYPE_CHECKING
 
 from typing_extensions import override
 
+from susa.core.communicator import AsyncCommandRunner
 from susa.core.interface import Interface
 from susa.core.resource import Resource
 from susa.core.stream import InputOutputStream, SavedOutputStream
@@ -135,14 +137,21 @@ class SerialAccessible(ABC):
 
 
 def wait_until_booted(
-    machine: Machine, timeout: float | None = None, quiet_time: float = 5
+    machine: Machine,
+    timeout: float | None = None,
+    quiet_time: float = 5,
+    host: AsyncCommandRunner | None = None,
 ) -> None:
     assert isinstance(machine, SerialAccessible)
     with machine.serial() as serial:
         console = SavedOutputStream(serial)
         deadline = Deadline(timeout)
         try:
-            wait_until_ping(machine.ip, deadline.remaining())
+            logging.info(
+                "Waiting for %s to answer pings at %s", machine.name, machine.ip
+            )
+            wait_until_ping(machine.ip, deadline.remaining(), host)
+            logging.info("Waiting for %s's console to be quiet", machine.name)
             console.wait_until_quiet(quiet_time, deadline.remaining())
         except (TimeoutError, EOFError) as e:
             with contextlib.suppress(EOFError):

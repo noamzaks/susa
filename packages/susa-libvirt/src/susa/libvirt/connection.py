@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import logging
 import threading
 from types import TracebackType
 from typing import Any, ClassVar
@@ -8,6 +9,7 @@ from typing import Any, ClassVar
 from typing_extensions import Self, override
 
 import libvirt as lv
+from susa.core.variable import Variable
 
 
 # Pickled as its URI, and unpickled as the current connection (which must be to the same URI).
@@ -16,9 +18,11 @@ class Connection:
     # Running while connections are open.
     _loop: ClassVar[threading.Thread | None] = None
 
-    # libvirt connects to `LIBVIRT_DEFAULT_URI` by default.
+    # `None` is libvirt's default, `LIBVIRT_DEFAULT_URI`.
+    URI: ClassVar[Variable[str | None]] = Variable(None)
+
     def __init__(self, uri: str | None = None) -> None:
-        self.uri = uri
+        self.uri = uri or Connection.URI.get()
         self.conn: lv.virConnect | None = None
 
     def __enter__(self) -> Self:
@@ -26,6 +30,7 @@ class Connection:
         if not Connection._open:
             self.start_event_loop()
         self.conn = lv.open(self.uri)
+        logging.info("Connected to %s", self.conn.getURI())
         Connection._open.append(self)
         return self
 

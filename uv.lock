@@ -8,7 +8,7 @@ resolution-markers = [
 
 [manifest]
 members = [
-    "susa-communicator",
+    "susa-communicators",
     "susa-core",
     "susa-libvirt",
     "susa-podman",
@@ -746,6 +746,14 @@ wheels = [
 ]
 
 [[package]]
+name = "pytest-greendots"
+version = "0.2.0"
+source = { git = "https://github.com/noamzaks/greendots?subdirectory=pytest-greendots#27e0cbc9d0174f3c4c479054648f736c0e2689bb" }
+dependencies = [
+    { name = "pytest" },
+]
+
+[[package]]
 name = "pytest-snapshot"
 version = "0.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -881,9 +889,9 @@ wheels = [
 ]
 
 [[package]]
-name = "susa-communicator"
+name = "susa-communicators"
 version = "0.1.0"
-source = { editable = "packages/susa-communicator" }
+source = { editable = "packages/susa-communicators" }
 dependencies = [
     { name = "pexpect" },
     { name = "susa-core" },
@@ -934,13 +942,17 @@ name = "susa-podman"
 version = "0.1.0"
 source = { editable = "packages/susa-podman" }
 dependencies = [
+    { name = "susa-communicators" },
     { name = "susa-core" },
+    { name = "susa-libvirt" },
     { name = "typing-extensions" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "susa-communicators", editable = "packages/susa-communicators" },
     { name = "susa-core", editable = "packages/susa-core" },
+    { name = "susa-libvirt", editable = "packages/susa-libvirt" },
     { name = "typing-extensions", specifier = ">=4.16.0" },
 ]
 
@@ -955,8 +967,8 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-communicator = [
-    { name = "susa-communicator" },
+communicators = [
+    { name = "susa-communicators" },
 ]
 libvirt = [
     { name = "susa-libvirt" },
@@ -968,24 +980,24 @@ podman = [
 [package.metadata]
 requires-dist = [
     { name = "pydantic", specifier = ">=2.13.4" },
-    { name = "susa-communicator", marker = "extra == 'communicator'", editable = "packages/susa-communicator" },
+    { name = "susa-communicators", marker = "extra == 'communicators'", editable = "packages/susa-communicators" },
     { name = "susa-core", editable = "packages/susa-core" },
     { name = "susa-libvirt", marker = "extra == 'libvirt'", editable = "packages/susa-libvirt" },
     { name = "susa-podman", marker = "extra == 'podman'", editable = "packages/susa-podman" },
     { name = "typing-extensions", specifier = ">=4.16.0" },
 ]
-provides-extras = ["communicator", "libvirt", "podman"]
+provides-extras = ["communicators", "libvirt", "podman"]
 
 [[package]]
 name = "susa-workspace"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
-    { name = "susa-communicator" },
+    { name = "susa-communicators" },
     { name = "susa-core" },
     { name = "susa-libvirt" },
     { name = "susa-podman" },
-    { name = "susa-recipes", extra = ["communicator", "libvirt", "podman"] },
+    { name = "susa-recipes", extra = ["communicators", "libvirt", "podman"] },
 ]
 
 [package.dev-dependencies]
@@ -995,6 +1007,7 @@ dev = [
     { name = "pre-commit" },
     { name = "pytesseract" },
     { name = "pytest" },
+    { name = "pytest-greendots" },
     { name = "pytest-snapshot" },
     { name = "pytest-xdist" },
     { name = "ruff" },
@@ -1004,11 +1017,11 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "susa-communicator", editable = "packages/susa-communicator" },
+    { name = "susa-communicators", editable = "packages/susa-communicators" },
     { name = "susa-core", editable = "packages/susa-core" },
     { name = "susa-libvirt", editable = "packages/susa-libvirt" },
     { name = "susa-podman", editable = "packages/susa-podman" },
-    { name = "susa-recipes", extras = ["communicator", "libvirt", "podman"], editable = "packages/susa-recipes" },
+    { name = "susa-recipes", extras = ["communicators", "libvirt", "podman"], editable = "packages/susa-recipes" },
 ]
 
 [package.metadata.requires-dev]
@@ -1018,6 +1031,7 @@ dev = [
     { name = "pre-commit", specifier = ">=4.6.2" },
     { name = "pytesseract", specifier = ">=0.3.13" },
     { name = "pytest", specifier = ">=9.1.1" },
+    { name = "pytest-greendots", git = "https://github.com/noamzaks/greendots?subdirectory=pytest-greendots" },
     { name = "pytest-snapshot", specifier = ">=0.9.0" },
     { name = "pytest-xdist", specifier = ">=3.8.0" },
     { name = "ruff", specifier = "==0.16.9" },

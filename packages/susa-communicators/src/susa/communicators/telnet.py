@@ -1,27 +1,32 @@
 from __future__ import annotations
 
+import shlex
+
 from typing_extensions import override
 
-from susa.communicator.login import Login
-from susa.communicator.process import ProcessStream
-from susa.communicator.shell import ShellCommunicator
+from susa.communicators.login import Login
+from susa.communicators.shell import ShellCommunicator
+from susa.core.communicator import HOST, AsyncCommandRunner, AsyncCommandStream
 from susa.core.stream import InputOutputStream
 
 
 class TelnetCommunicator(ShellCommunicator):
     def __init__(
         self,
-        host: str,
+        ip: str,
         username: str,
         password: str,
         port: int = 23,
+        host: AsyncCommandRunner | None = None,
     ) -> None:
         super().__init__(Login(password, username))
-        self.host = host
+        self.ip = ip
         self.port = port
+        self.host = host or HOST.get()
 
     @override
     def open_stream(self) -> InputOutputStream:
         # 8-bit clean, with no escape character (which would otherwise be intercepted in the data), and without
         # ~/.telnetrc.
-        return ProcessStream("telnet", "-8", "-E", "-c", self.host, str(self.port))
+        command = ["telnet", "-8", "-E", "-c", self.ip, str(self.port)]
+        return AsyncCommandStream(self.host.start(shlex.join(command)))

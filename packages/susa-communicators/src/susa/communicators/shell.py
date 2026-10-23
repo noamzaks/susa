@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import logging
 import re
 import time
 from abc import abstractmethod
@@ -46,8 +48,9 @@ class ShellCommunicator(CommandRunner):
     # The machine may still be booting.
     @override
     def create(self) -> None:
-        deadline = Deadline(self.CONNECT_TIMEOUT)
+        deadline = Deadline(ShellCommunicator.CONNECT_TIMEOUT)
         while True:
+            logging.debug("Connecting to the shell")
             self.stream = self.open_stream()
             try:
                 # Interrupting a client or a shell that's starting may kill it.
@@ -58,42 +61,59 @@ class ShellCommunicator(CommandRunner):
                     interrupt = True
                 return
             except EOFError:
+                logging.debug("The shell's connection closed")
                 self.stream.close()
                 if deadline.passed():
                     raise
-                time.sleep(self.RECONNECT_INTERVAL)
+                time.sleep(ShellCommunicator.RECONNECT_INTERVAL)
 
     def attach(self, interrupt: bool) -> bool:
         assert self.stream is not None
         if interrupt:
-            self.stream.write(self.INTERRUPT)
+            self.stream.write(ShellCommunicator.INTERRUPT)
         try:
-            self.stream.wait_until_quiet(self.quiet_time, self.SETUP_TIMEOUT)
+            self.stream.wait_until_quiet(
+                self.quiet_time, ShellCommunicator.SETUP_TIMEOUT
+            )
             if self.prelude is not None:
                 self.prelude(self.stream)
-                self.stream.wait_until_quiet(self.quiet_time, self.SETUP_TIMEOUT)
+                self.stream.wait_until_quiet(
+                    self.quiet_time, ShellCommunicator.SETUP_TIMEOUT
+                )
             self.output = PexpectStream(self.stream)
             # Programs the shell starts with may discard part of what's typed (e.g. FreeBSD's resizewin), and what's
             # left of the setup could start one (e.g. `vi`), unlike what's left of an exit marker.
-            self.stream.write(self.MARK_EXIT + self.ENTER)
-            if not self.expect_exit(self.SETUP_ATTEMPT_TIMEOUT):
+            self.stream.write(ShellCommunicator.MARK_EXIT + ShellCommunicator.ENTER)
+            if not self.expect_exit(ShellCommunicator.SETUP_ATTEMPT_TIMEOUT):
                 return False
             # One line, since turning line editing off discards whatever it already read.
-            self.stream.write(self.SETUP + b"; " + self.MARK_EXIT + self.ENTER)
-            if not self.expect_exit(self.SETUP_ATTEMPT_TIMEOUT):
+            self.stream.write(
+                ShellCommunicator.SETUP
+                + b"; "
+                + ShellCommunicator.MARK_EXIT
+                + ShellCommunicator.ENTER
+            )
+            if not self.expect_exit(ShellCommunicator.SETUP_ATTEMPT_TIMEOUT):
                 return False
-            self.stream.wait_until_quiet(self.RECOVERY_QUIET_TIME, self.SETUP_TIMEOUT)
+            self.stream.wait_until_quiet(
+                ShellCommunicator.RECOVERY_QUIET_TIME, ShellCommunicator.SETUP_TIMEOUT
+            )
             self.output.buffer = b""
             # Part of the setup may have been discarded with the marker still sent.
-            probe = self.run(f"echo {self.READY}", self.SETUP_ATTEMPT_TIMEOUT)
+            probe = self.run(
+                f"echo {ShellCommunicator.READY}",
+                ShellCommunicator.SETUP_ATTEMPT_TIMEOUT,
+            )
         except TimeoutError:
             return False
-        return probe.stdout == f"{self.READY}\n".encode()
+        return probe.stdout == f"{ShellCommunicator.READY}\n".encode()
 
     @override
     def destroy(self) -> None:
         assert self.stream is not None
-        self.stream.write(b"exit" + self.ENTER)
+        # Its client may be gone already (e.g. Ctrl-C reaches it too).
+        with contextlib.suppress(BrokenPipeError):
+            self.stream.write(b"exit" + ShellCommunicator.ENTER)
         self.stream.close()
         self.stream, self.output = None, None
 
@@ -102,22 +122,38 @@ class ShellCommunicator(CommandRunner):
         self, command: str, timeout: float | None = None
     ) -> CompletedProcess[bytes]:
         assert self.stream is not None and self.output is not None
-        self.stream.write(command.encode() + self.ENTER + self.MARK_EXIT + self.ENTER)
+        logging.debug("Running %.200r in the shell", command)
+        self.stream.write(
+            command.encode()
+            + ShellCommunicator.ENTER
+            + ShellCommunicator.MARK_EXIT
+            + ShellCommunicator.ENTER
+        )
         if not self.expect_exit(timeout):
             # Interrupting usually also discards the pending marker line, so send it again.
-            self.stream.write(self.INTERRUPT + self.MARK_EXIT + self.ENTER)
-            self.expect_exit(self.SETUP_ATTEMPT_TIMEOUT)
-            self.stream.wait_until_quiet(self.RECOVERY_QUIET_TIME, self.SETUP_TIMEOUT)
+            self.stream.write(
+                ShellCommunicator.INTERRUPT
+                + ShellCommunicator.MARK_EXIT
+                + ShellCommunicator.ENTER
+            )
+            self.expect_exit(ShellCommunicator.SETUP_ATTEMPT_TIMEOUT)
+            self.stream.wait_until_quiet(
+                ShellCommunicator.RECOVERY_QUIET_TIME, ShellCommunicator.SETUP_TIMEOUT
+            )
             self.output.buffer = b""
             raise TimeoutError(f"{command!r} took more than {timeout} seconds")
         before, match = self.output.before, self.output.match
         # Sanity.
         assert before is not None and isinstance(match, re.Match)
-        return CompletedProcess(command, int(match.group(1)), before)
+        exit_code = int(match.group(1))
+        logging.debug("It exited with %d, writing %.1000r", exit_code, before)
+        return CompletedProcess(command, exit_code, before)
 
     def expect_exit(self, timeout: float | None) -> bool:
         assert self.output is not None
-        return self.output.expect([self.EXIT, pexpect.TIMEOUT], timeout) == 0
+        return (
+            self.output.expect([ShellCommunicator.EXIT, pexpect.TIMEOUT], timeout) == 0
+        )
 
 
 class PexpectStream(SpawnBase):  # type: ignore

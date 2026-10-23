@@ -6,12 +6,12 @@ from collections.abc import Iterator
 from pathlib import Path
 from subprocess import CalledProcessError, CompletedProcess
 
+import pexpect
 import pytest
 from typing_extensions import override
 
-from susa.communicator.process import ProcessStream
-from susa.communicator.shell import PexpectStream, Prelude, ShellCommunicator
-from susa.communicator.unix import UnixCommunicator
+from susa.communicators.shell import PexpectStream, Prelude, ShellCommunicator
+from susa.communicators.unix import UnixCommunicator
 from susa.core.communicator import CommandRunner
 from susa.core.stream import InputOutputStream, OutputStream
 
@@ -28,7 +28,31 @@ class LocalShell(ShellCommunicator):
 
     @override
     def open_stream(self) -> InputOutputStream:
-        return ProcessStream(*self.argv)
+        return TerminalStream(self.argv)
+
+
+# A program in a pseudo-terminal, as ShellCommunicator expects (like a serial console's shell, or ssh's with `-tt`):
+# without one, e.g. bash doesn't take "\r" as the end of a line.
+class TerminalStream(InputOutputStream):
+    def __init__(self, argv: list[str]) -> None:
+        self.process: pexpect.spawn[bytes] = pexpect.spawn(argv[0], argv[1:])
+
+    @override
+    def read(self, size: int | None = None, timeout: float | None = 0) -> bytes:
+        try:
+            return self.process.read_nonblocking(size or self.process.maxread, timeout)
+        except pexpect.TIMEOUT:
+            return b""
+        except pexpect.EOF:
+            raise EOFError from None
+
+    @override
+    def write(self, data: bytes) -> None:
+        self.process.send(data)
+
+    @override
+    def close(self) -> None:
+        self.process.close()
 
 
 @pytest.fixture(params=list(SHELLS))
@@ -132,6 +156,14 @@ def test_start_stdin(unix: UnixCommunicator) -> None:
     assert command.stdout.read_all(timeout=5) == b"done\n"
     with pytest.raises(EOFError):
         command.stdout.read()
+
+
+# The shell doesn't print about what runs in the background (e.g. "[1] 1234", or that it finished).
+def test_start_quiet(shell: LocalShell, unix: UnixCommunicator) -> None:
+    command = unix.start("true")
+    assert command.pid.isdigit()
+    assert command.wait(timeout=5) == 0
+    assert shell.check("echo a") == b"a\n"
 
 
 def test_transfer(unix: UnixCommunicator, tmp_path: Path) -> None:

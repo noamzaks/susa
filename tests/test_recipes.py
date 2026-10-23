@@ -8,8 +8,8 @@ import pydantic
 import pytest
 from typing_extensions import override
 
-from susa.communicator.login import Login
-from susa.communicator.serial import SerialCommunicator
+from susa.communicators.login import Login
+from susa.communicators.serial import SerialCommunicator
 from susa.core.machine import Serial, SerialAccessible
 from susa.libvirt import (
     DiskModel,
@@ -26,8 +26,8 @@ DISK = "susa.libvirt.disk_model.DiskModel"
 INTERFACE = "susa.libvirt.interface_model.InterfaceModel"
 VOLUME = "susa.libvirt.volume_model.VolumeModel"
 MAC = "52:54:00:12:34:56"
-SSH = "susa.communicator.ssh.SSHCommunicator"
-SERIAL = "susa.communicator.serial.SerialCommunicator"
+SSH = "susa.communicators.ssh.SSHCommunicator"
+SERIAL = "susa.communicators.serial.SerialCommunicator"
 
 
 def make_recipe(recipe: dict[str, Any]) -> Any:
@@ -160,6 +160,6 @@ def test_schema() -> None:
     for name, cls in CLASSES.items():
         assert list(defs[f"{cls.__name__}Recipe"]["properties"]) == [name]
     ssh = defs["SSHCommunicator___init__"]
-    assert ssh["required"] == ["host", "username"]
-    for argument in ("host", "port"):
+    assert ssh["required"] == ["ip", "username"]
+    for argument in ("ip", "port", "host"):
         assert {"$ref": "#/$defs/Reference"} in ssh["properties"][argument]["anyOf"]

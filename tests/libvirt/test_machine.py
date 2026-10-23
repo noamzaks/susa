@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import random
 import shutil
@@ -13,8 +14,8 @@ from typing import Any
 import pytest
 from scapy.layers.inet import ICMP, IP
 
-from susa.communicator.shell import ShellCommunicator
-from susa.communicator.unix import UnixCommunicator
+from susa.communicators.shell import ShellCommunicator
+from susa.communicators.unix import UnixCommunicator
 from susa.core.communicator import FileTransferrer
 from susa.core.machine import wait_until_booted
 from susa.libvirt import (
@@ -60,7 +61,7 @@ class Image:
             {"subnet": {SUBNET: {}}},
             {
                 "network_model": {
-                    NETWORK_MODEL: ["default", {"ip": {"$ref": "subnet.address"}}]
+                    NETWORK_MODEL: ["default", {"ip": {"$ref": "subnet.ip"}}]
                 }
             },
             {"volume_model": {VOLUME_MODEL: [{"backing": str(path or self.path)}]}},
@@ -140,20 +141,20 @@ IMAGES = {
 }
 
 # All of the images have sshd, telnet and rlogin servers, and `root` and `user` with the password `a`.
-LOGIN = {"host": {"$ref": "machine.ip"}, "username": "root", "password": "a"}
+LOGIN = {"ip": {"$ref": "machine.ip"}, "username": "root", "password": "a"}
 COMMUNICATORS: dict[str, dict[str, Any]] = {
     "serial": {
-        "susa.communicator.serial.SerialCommunicator": {
+        "susa.communicators.serial.SerialCommunicator": {
             "machine": {"$ref": "machine"},
             "login": {"username": "root", "password": "a"},
         }
     },
-    "ssh": {"susa.communicator.ssh.SSHCommunicator": LOGIN},
+    "ssh": {"susa.communicators.ssh.SSHCommunicator": LOGIN},
     "ssh-scp": {
-        "susa.communicator.ssh.SSHCommunicator": {**LOGIN, "file_transfer": "scp"}
+        "susa.communicators.ssh.SSHCommunicator": {**LOGIN, "file_transfer": "scp"}
     },
-    "telnet": {"susa.communicator.telnet.TelnetCommunicator": LOGIN},
-    "rlogin": {"susa.communicator.rlogin.RloginCommunicator": LOGIN},
+    "telnet": {"susa.communicators.telnet.TelnetCommunicator": LOGIN},
+    "rlogin": {"susa.communicators.rlogin.RloginCommunicator": LOGIN},
 }
 
 
@@ -183,6 +184,7 @@ def session(request: pytest.FixtureRequest, connection: None) -> Iterator[Sessio
 
 @pytest.fixture(scope="module")
 def ready(session: Session) -> Iterator[LVSnapshot]:
+    logging.info("Snapshotting the booted machine")
     with session.get("machine", LVMachine).snapshot() as snapshot:
         yield snapshot
 
@@ -196,6 +198,7 @@ def name(request: pytest.FixtureRequest) -> str:
 @pytest.fixture
 def machine(session: Session, ready: LVSnapshot) -> Iterator[LVMachine]:
     yield session.get("machine", LVMachine)
+    logging.info("Reverting the machine to its snapshot")
     ready.revert()
 
 
@@ -239,6 +242,7 @@ def shell(machine: LVMachine, kind: str) -> Iterator[ShellCommunicator]:
     result: ShellCommunicator = Recipe.model_validate(COMMUNICATORS[kind]).make(
         machine=machine
     )
+    logging.info("Connecting over %s", kind)
     with result:
         yield result
 
@@ -307,8 +311,10 @@ def test_transfer(machine: LVMachine, kind: str, tmp_path: Path) -> None:
     for i, content in enumerate(data):
         (tmp_path / f"up{i}").write_bytes(content)
     with transferrer(machine, kind) as t:
+        logging.info("Transferring a file each way")
         t.upload_single(tmp_path / "up0", "/tmp/susa0")
         t.download_single("/tmp/susa0", tmp_path / "down0")
+        logging.info("Transferring two files each way")
         t.upload({tmp_path / f"up{i}": f"/tmp/susa{i}" for i in (1, 2)})
         t.download({f"/tmp/susa{i}": tmp_path / f"down{i}" for i in (1, 2)})
     for i, content in enumerate(data):
@@ -318,9 +324,11 @@ def test_transfer(machine: LVMachine, kind: str, tmp_path: Path) -> None:
 # Communicators connect (again) until the machine is up, so they need no waiting for it to boot.
 @pytest.mark.parametrize("kind", ("serial", "ssh"))
 def test_power_cycle(machine: LVMachine, kind: str) -> None:
+    logging.info("Powering the machine off")
     machine.power_off()
     assert not machine.is_powered_on
 
+    logging.info("Powering the machine on")
     machine.power_on()
     assert machine.is_powered_on
     with shell(machine, kind) as s:
@@ -329,6 +337,7 @@ def test_power_cycle(machine: LVMachine, kind: str) -> None:
 
 def test_sniff(machine: LVMachine, network: LVNetwork) -> None:
     with network.sniffer() as sniffer:
+        logging.info("Pinging the machine while sniffing its network")
         pings(machine.ip, 3, timeout=5, interval=1)
     requests = [
         p
@@ -355,11 +364,14 @@ def test_commit(
         pytest.skip("Committing is tried on freebsd10")
     with shell(machine, "ssh") as ssh:
         ssh.check("echo committed > /root/susa-commit")
+    logging.info("Shutting the machine down")
     # Cleanly, so the file system is written out.
     machine.shutdown()
     wait_until(lambda: not machine.is_powered_on, BOOT_TIMEOUT)
+    logging.info("Committing its volume into %s", committed)
     volume.commit(committed)
     recipe = [*IMAGES[name].session(committed), {"ssh": COMMUNICATORS["ssh"]}]
+    logging.info("Booting a machine from the committed image")
     with Session.model_validate({"objects": recipe}) as session:
         ssh = session.get("ssh", ShellCommunicator)
         assert ssh.check("cat /root/susa-commit") == b"committed\n"

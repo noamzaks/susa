@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import os
-import select
-import subprocess
+import shlex
 import time
 
 from typing_extensions import override
 
 import libvirt as lv
+from susa.core.communicator import HOST, AsyncCommand, AsyncCommandRunner
 from susa.core.interface import BasicInterface, Interface
 from susa.core.network import Network, Sniffable, Sniffer
 from susa.libvirt.entity import LVEntity
@@ -52,37 +51,30 @@ class LVNetwork(LVEntity[lv.virNetwork, NetworkModel], Network, Sniffable):
 
 
 class LVSniffer(Sniffer):
-    CHUNK_SIZE = 1 << 16
     CAPTURE_DRAIN_TIME = 1
 
-    def __init__(self, interface: str) -> None:
+    def __init__(self, interface: str, host: AsyncCommandRunner | None = None) -> None:
         self.interface = interface
-        self.process: subprocess.Popen[bytes] | None = None
+        self.host = host or HOST.get()
+        self.command: AsyncCommand | None = None
 
     @override
     def create(self) -> None:
-        self.process = subprocess.Popen(
-            ["tcpdump", "-i", self.interface, "-U", "-w", "-"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+        self.command = self.host.start(
+            f"tcpdump -i {shlex.quote(self.interface)} -U -w -"
         )
         # tcpdump writes the pcap header once capturing started, and opening the reader waits for it.
         _ = self.pcap
 
     @override
     def destroy(self) -> None:
-        assert self.process is not None
+        assert self.command is not None
         # Let packets that were just captured reach tcpdump.
-        time.sleep(self.CAPTURE_DRAIN_TIME)
-        self.process.terminate()
-        self.process.wait()
+        time.sleep(LVSniffer.CAPTURE_DRAIN_TIME)
+        self.command.kill()
+        self.command.wait()
 
     @override
     def read(self, size: int | None = None, timeout: float | None = 0) -> bytes:
-        assert self.process is not None and self.process.stdout is not None
-        if not select.select([self.process.stdout], [], [], timeout)[0]:
-            return b""
-        data = os.read(self.process.stdout.fileno(), size or self.CHUNK_SIZE)
-        if not data:
-            raise EOFError
-        return data
+        assert self.command is not None
+        return self.command.stdout.read(size, timeout)

@@ -23,3 +23,9 @@ def test_default_uri(monkeypatch: pytest.MonkeyPatch) -> None:
     with Connection() as connection:
         assert connection.conn is not None
         assert connection.conn.getURI() == "test:///default"
+
+
+def test_uri_variable() -> None:
+    with Connection.URI.set("test:///default"), Connection() as connection:
+        assert connection.conn is not None
+        assert connection.conn.getURI() == "test:///default"

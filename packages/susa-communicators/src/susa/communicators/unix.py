@@ -7,6 +7,7 @@ import time
 from collections.abc import Mapping
 from io import BytesIO
 from pathlib import Path
+from subprocess import CompletedProcess
 
 from typing_extensions import override
 
@@ -40,14 +41,22 @@ class UnixCommunicator(AsyncCommandRunner, FileTransferrer):
         self.communicator.check(f"rm -r {shlex.quote(self.directory)}")
         self.directory = None
 
+    # Its streams are read through the same shell, so after it exited rather than while it's waited for.
+    @override
+    def run(
+        self, command: str, timeout: float | None = None
+    ) -> CompletedProcess[bytes]:
+        deadline = Deadline(timeout)
+        unix_command = self.start(command)
+        unix_command.stdin.close()
+        exit_code = unix_command.wait(deadline.remaining())
+        stdout = unix_command.stdout.read_all(deadline.remaining())
+        stderr = unix_command.stderr.read_all(deadline.remaining())
+        return CompletedProcess(command, exit_code, stdout, stderr)
+
     @override
     def start(self, command: str) -> UnixCommand:
         return UnixCommand(self, command)
-
-    def background(self, command: str) -> str:
-        output = self.communicator.check(f"{command} & echo $!")
-        # Interactive shells may also print the job number (e.g. "[1] 1234").
-        return output.split()[-1].decode()
 
     @override
     def upload_single(
@@ -104,9 +113,9 @@ class UnixCommunicator(AsyncCommandRunner, FileTransferrer):
         deadline = Deadline(timeout)
         compressed = gzip.compress(data)
         temporary = shlex.quote(self.temporary_file())
-        for i in range(0, len(compressed), self.WRITE_CHUNK_SIZE):
+        for i in range(0, len(compressed), UnixCommunicator.WRITE_CHUNK_SIZE):
             command = self.printf_command(
-                compressed[i : i + self.WRITE_CHUNK_SIZE], temporary
+                compressed[i : i + UnixCommunicator.WRITE_CHUNK_SIZE], temporary
             )
             self.communicator.check(command, deadline.remaining())
         self.communicator.check(
@@ -126,26 +135,37 @@ class UnixCommunicator(AsyncCommandRunner, FileTransferrer):
             "printf '"
             + "".join(
                 chr(b) if chr(b).isalnum() and b < 128 else f"\\{b:03o}"
-                for b in data[i : i + self.PRINTF_CHUNK_SIZE]
+                for b in data[i : i + UnixCommunicator.PRINTF_CHUNK_SIZE]
             )
             + f"' >> {target}"
-            for i in range(0, len(data), self.PRINTF_CHUNK_SIZE)
+            for i in range(0, len(data), UnixCommunicator.PRINTF_CHUNK_SIZE)
         )
 
 
 class UnixCommand(AsyncCommand):
+    POLL_INTERVAL = 0.2
+
     def __init__(self, unix: UnixCommunicator, command: str) -> None:
         self.unix = unix
         assert unix.directory is not None
         template = shlex.quote(f"{unix.directory}/command.XXXXXX")
         directory = unix.communicator.check(f"mktemp -d {template}").decode().strip()
         directory = shlex.quote(directory)
-        unix.communicator.check(f"mkfifo {directory}/in")
-        self.pid = unix.background(
-            f"sh -c {shlex.quote(command)} < {directory}/in > {directory}/out 2> {directory}/err"
+        fifo = f"{directory}/in"
+        # This shell opens the FIFO's ends (first read-write, so that neither blocks) before starting the command and
+        # what holds its input open, so that both have them however long they take to start.
+        unix.communicator.check(
+            f"mkfifo {fifo} && exec 3<> {fifo} 4> {fifo} 5< {fifo} 3<&-"
         )
+        self.status = f"{directory}/status"
+        self.pid = self.background(
+            f"sh -c {shlex.quote(command)} <&5 > {directory}/out 2> {directory}/err",
+            self.status,
+        )
+        holder = self.background("sleep 2147483647 >&4", "/dev/null")
+        unix.communicator.check("exec 4>&- 5<&-")
         self.exit_code: int | None = None
-        self._stdin = UnixInputStream(unix, f"{directory}/in")
+        self._stdin = UnixInputStream(unix, fifo, holder)
         self._stdout = UnixOutputStream(self, f"{directory}/out")
         self._stderr = UnixOutputStream(self, f"{directory}/err")
 
@@ -168,31 +188,41 @@ class UnixCommand(AsyncCommand):
     def poll(self) -> int | None:
         if self.exit_code is not None:
             return self.exit_code
-        if self.unix.communicator.run(f"kill -0 {self.pid}").returncode == 0:
+        # It's empty until the exit code is written (at once).
+        status = self.unix.communicator.run(f"cat {self.status} 2> /dev/null").stdout
+        if not status:
             return None
-        return self.wait()
+        self.exit_code = int(status)
+        self._stdin.close()
+        return self.exit_code
 
     @override
     def wait(self, timeout: float | None = None) -> int:
-        # The shell only reports the exit code once.
-        if self.exit_code is not None:
-            return self.exit_code
-        result = self.unix.communicator.run(f"wait {self.pid}", timeout)
-        self.exit_code = result.returncode
-        self._stdin.close()
-        return self.exit_code
+        deadline = Deadline(timeout)
+        while (exit_code := self.poll()) is None:
+            if deadline.passed():
+                raise TimeoutError(f"The command didn't exit within {timeout} seconds")
+            time.sleep(UnixCommand.POLL_INTERVAL)
+        return exit_code
 
     @override
     def kill(self) -> None:
         self.unix.communicator.check(f"kill {self.pid}")
 
+    # From a subshell, so that it isn't one of this shell's jobs, which interactive shells print about (e.g. "[1] 1234",
+    # or that one finished). The subshell writes its exit code to `status`, and stops holding the output (so that it's
+    # read) once it started.
+    def background(self, command: str, status: str) -> str:
+        waiter = f"{command} 4>&- 5<&- & echo $!; exec > /dev/null 4>&- 5<&-; wait $!; echo $? > {status}"
+        return self.unix.communicator.check(f"echo $( ({waiter}) & )").decode().strip()
+
 
 class UnixInputStream(InputStream):
-    def __init__(self, unix: UnixCommunicator, path: str) -> None:
+    # The holder keeps the FIFO open (so the command doesn't see its end) until it's closed.
+    def __init__(self, unix: UnixCommunicator, path: str, holder: str) -> None:
         self.unix = unix
         self.path = path
-        # Keeps the FIFO open (so the command doesn't see its end) until it's closed.
-        self.holder: str | None = unix.background(f"sleep 2147483647 > {path}")
+        self.holder: str | None = holder
 
     @override
     def write(self, data: bytes) -> None:
@@ -202,7 +232,7 @@ class UnixInputStream(InputStream):
     def close(self) -> None:
         if self.holder is None:
             return
-        self.unix.communicator.run(f"kill {self.holder}; wait {self.holder}")
+        self.unix.communicator.check(f"kill {self.holder}")
         self.holder = None
 
 
@@ -229,4 +259,4 @@ class UnixOutputStream(OutputStream):
                 raise EOFError
             if deadline.passed():
                 return b""
-            time.sleep(self.POLL_INTERVAL)
+            time.sleep(UnixOutputStream.POLL_INTERVAL)

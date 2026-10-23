@@ -27,7 +27,7 @@ def machine_model(*steps: Any) -> dict[str, Any]:
 
 SESSION: list[dict[str, Any]] = [
     {"subnet": {SUBNET: {}}},
-    {"network_model": {NETWORK: ["default", {"ip": {"$ref": "subnet.address"}}]}},
+    {"network_model": {NETWORK: ["default", {"ip": {"$ref": "subnet.ip"}}]}},
     {"volume_model": {VOLUME: [{"pool": "default-pool"}, {"capacity": GIGA}]}},
     {
         "machine_model": machine_model(

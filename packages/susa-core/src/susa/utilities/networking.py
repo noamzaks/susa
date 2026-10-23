@@ -6,6 +6,7 @@ import json
 import os
 import random
 import re
+import shlex
 import subprocess
 import tempfile
 from pathlib import Path
@@ -13,38 +14,47 @@ from typing import ClassVar
 
 from typing_extensions import override
 
+from susa.core.communicator import HOST, AsyncCommandRunner, CommandRunner
 from susa.core.resource import Resource
+from susa.core.variable import Variable
 from susa.utilities.generic import wait_until
 
 PING_REPLY_PATTERN = re.compile(r"icmp_seq=(\d+)\b.*?\btime=([\d.]+) ms")
 
 
-def ping(host: str, timeout: float | None = 1) -> float | None:
-    [time] = pings(host, 1, timeout)
+def ping(
+    ip: str, timeout: float | None = 1, host: AsyncCommandRunner | None = None
+) -> float | None:
+    [time] = pings(ip, 1, timeout, host=host)
     return time
 
 
 def pings(
-    host: str, count: int, timeout: float | None = 1, interval: float | None = None
+    ip: str,
+    count: int,
+    timeout: float | None = 1,
+    interval: float | None = None,
+    host: AsyncCommandRunner | None = None,
 ) -> list[float | None]:
     command = ["ping", "-n", "-c", str(count)]
     if interval is not None:
         command += ["-i", str(interval)]
-    command.append(host)
+    command.append(ip)
 
+    process = (host or HOST.get()).start(shlex.join(command))
+    process.stdin.close()
     try:
-        result = subprocess.run(
-            command, capture_output=True, check=False, timeout=timeout
-        )
-    except subprocess.TimeoutExpired as e:
-        output = e.stdout or b""
+        returncode = process.wait(timeout)
+    except TimeoutError:
+        process.kill()
+        process.wait()
     else:
         # ping exits with 1 when some replies are missing, and with other codes on actual errors.
-        if result.returncode not in (0, 1):
+        if returncode not in (0, 1):
             raise subprocess.CalledProcessError(
-                result.returncode, command, result.stdout, result.stderr
+                returncode, command, stderr=process.stderr.read_all()
             )
-        output = result.stdout
+    output = process.stdout.read_all()
 
     times: list[float | None] = [None] * count
     for match in PING_REPLY_PATTERN.finditer(output.decode()):
@@ -60,8 +70,10 @@ def pings(
     return times
 
 
-def wait_until_ping(host: str, timeout: float | None = None) -> None:
-    wait_until(lambda: ping(host) is not None, timeout)
+def wait_until_ping(
+    ip: str, timeout: float | None = None, host: AsyncCommandRunner | None = None
+) -> None:
+    wait_until(lambda: ping(ip, host=host) is not None, timeout)
 
 
 def random_mac(prefix: str | None = None) -> str:
@@ -70,23 +82,34 @@ def random_mac(prefix: str | None = None) -> str:
     return ":".join(parts)
 
 
-# A /24 overlapping none of the host's routes, reserved across processes by locking its byte of the lock file.
+# A /24 of the given subnets overlapping none of the host's routes, reserved across processes by locking its byte (its
+# number among all /24s) of the lock file.
 class SubnetReservation(Resource):
-    SUBNETS = ipaddress.IPv4Network("10.0.0.0/8")
-    LOCK = Path(tempfile.gettempdir()) / "susa-subnets.lock"
-    LOCK_VARIABLE = "SUSA_SUBNETS_LOCK"
+    LOCK: ClassVar[Variable[Path]] = Variable(
+        Path(
+            os.environ.get("SUSA_SUBNETS_LOCK")
+            or Path(tempfile.gettempdir()) / "susa-subnets.lock"
+        )
+    )
     # A process' own locks don't stop it.
     TAKEN: ClassVar[set[tuple[Path, int]]] = set()
     # Open while this process has reservations in them, as closing any of its descriptors of one releases its locks.
     FILES: ClassVar[dict[Path, int]] = {}
 
-    def __init__(self, lock: str | Path | None = None) -> None:
-        self.lock = Path(lock or os.environ.get(self.LOCK_VARIABLE) or self.LOCK)
+    def __init__(
+        self,
+        host: CommandRunner | None = None,
+        lock: str | Path | None = None,
+        subnets: str = "10.0.0.0/8",
+    ) -> None:
+        self.host = host or HOST.get()
+        self.lock = Path(lock or SubnetReservation.LOCK.get())
+        self.subnets = ipaddress.IPv4Network(subnets)
         self.index: int | None = None
         self.subnet: ipaddress.IPv4Network | None = None
 
     @property
-    def address(self) -> str:
+    def ip(self) -> str:
         assert self.subnet is not None
         return str(next(self.subnet.hosts()))
 
@@ -95,8 +118,9 @@ class SubnetReservation(Resource):
         assert self.subnet is None
         used = self.host_subnets()
         lock = self.lock_file()
-        for index, subnet in enumerate(self.SUBNETS.subnets(new_prefix=24)):
-            if (self.lock, index) in self.TAKEN or any(
+        for subnet in self.subnets.subnets(new_prefix=24):
+            index = int(subnet.network_address) >> 8
+            if (self.lock, index) in SubnetReservation.TAKEN or any(
                 subnet.overlaps(other) for other in used
             ):
                 continue
@@ -104,34 +128,32 @@ class SubnetReservation(Resource):
                 fcntl.lockf(lock, fcntl.LOCK_EX | fcntl.LOCK_NB, 1, index)
             except OSError:
                 continue
-            self.TAKEN.add((self.lock, index))
+            SubnetReservation.TAKEN.add((self.lock, index))
             self.index, self.subnet = index, subnet
             return
-        raise RuntimeError(f"There's no free subnet left in {self.SUBNETS}")
+        raise RuntimeError(f"There's no free subnet left in {self.subnets}")
 
     @override
     def destroy(self) -> None:
         assert self.index is not None and self.subnet is not None
-        fcntl.lockf(self.FILES[self.lock], fcntl.LOCK_UN, 1, self.index)
-        self.TAKEN.remove((self.lock, self.index))
-        if not any(lock == self.lock for lock, _ in self.TAKEN):
-            os.close(self.FILES.pop(self.lock))
+        fcntl.lockf(SubnetReservation.FILES[self.lock], fcntl.LOCK_UN, 1, self.index)
+        SubnetReservation.TAKEN.remove((self.lock, self.index))
+        if not any(lock == self.lock for lock, _ in SubnetReservation.TAKEN):
+            os.close(SubnetReservation.FILES.pop(self.lock))
         self.index, self.subnet = None, None
 
     # Every user locks it, which the umask stops at creation.
     def lock_file(self) -> int:
-        if self.lock not in self.FILES:
-            lock = self.FILES[self.lock] = os.open(
+        if self.lock not in SubnetReservation.FILES:
+            lock = SubnetReservation.FILES[self.lock] = os.open(
                 self.lock, os.O_CREAT | os.O_RDWR, 0o666
             )
             if os.fstat(lock).st_uid == os.getuid():
                 os.fchmod(lock, 0o666)
-        return self.FILES[self.lock]
+        return SubnetReservation.FILES[self.lock]
 
-    @staticmethod
-    def host_subnets() -> list[ipaddress.IPv4Network]:
-        command = ["ip", "-json", "-4", "route", "show", "table", "all"]
-        routes = json.loads(subprocess.check_output(command))
+    def host_subnets(self) -> list[ipaddress.IPv4Network]:
+        routes = json.loads(self.host.check("ip -json -4 route show table all"))
         return [
             ipaddress.IPv4Network(route["dst"], strict=False)
             for route in routes

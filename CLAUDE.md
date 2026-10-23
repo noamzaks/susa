@@ -7,19 +7,22 @@ around libvirt/QEMU virtual machines of many architectures.
 
 - `uv sync`, `uv run ruff check`, `uv run ruff format`, `uv run mypy` (strict).
 - What CI runs: `uv run pre-commit run --all-files`.
-- Fast tests: `uv run pytest --ignore tests/libvirt/test_machine.py --ignore tests/podman`.
-- Update XML snapshots after an intended model change: `uv run pytest tests/libvirt/test_models.py --snapshot-update`,
+- Always run tests with `scripts/test.sh` (pytest's arguments), which records each run for greendots in
+  `/var/opt/greendots2/susa/<commit>-<n>` (the `susa` project).
+- Fast tests: `scripts/test.sh --ignore tests/libvirt/test_machine.py --ignore tests/podman`.
+- Update XML snapshots after an intended model change: `scripts/test.sh tests/libvirt/test_models.py --snapshot-update`,
   then re-run without the flag and review the diff.
-- Real-VM tests: `uv run pytest tests/libvirt/test_machine.py -n 3` (more workers starve the host and time out), and
-  `uv run pytest tests/podman` (builds the container's image the first time).
+- Real-VM tests: `scripts/test.sh tests/libvirt/test_machine.py -n 3` (more workers starve the host and time out), and
+  `scripts/test.sh tests/podman` (builds the container's image the first time).
 
 ## Design
 
 - **Layers.** `susa.core` holds backend-independent contracts (abstract classes) only. `susa.libvirt` implements them,
-  `susa.communicator` runs commands over any stream, `susa.podman` runs libvirt in a container, `susa.recipes` makes
+  `susa.communicators` runs commands over any stream, `susa.podman` runs libvirt in a container, `susa.recipes` makes
   objects from JSON, and `susa.utilities` holds general helpers. Each is its own distribution in the uv workspace under
   `packages/` (`susa-core` holds core and utilities), sharing the `susa` namespace package (so there's no
-  `susa/__init__.py`), and depends only on those below it: core, then communicator, libvirt and podman, then recipes.
+  `susa/__init__.py`), and depends only on those below it: core, then communicators and libvirt, then podman, then
+  recipes.
 - **Bottom up.** Parts are small and independent (models, entities, communicators), each can be a JSON recipe, and they
   connect directly (e.g. `machine.network(network)`, `SSHCommunicator(machine, ...)`, `{"$ref": "machine"}`).
   Conveniences are opt-in, generic and composable (e.g. `Session`); nothing imposes a layout or an orchestration.
@@ -30,6 +33,10 @@ around libvirt/QEMU virtual machines of many architectures.
   resource between concurrent users).
 - **Capabilities are mixins** (`Snapshottable`, `Powerable`, ...), checked with `isinstance`.
 - **Contracts stay loose.** Core types are ABCs with abstract properties; don't collapse them into concrete classes.
+- **Defaults are `Variable`s** (e.g. `HOST`, which commands run on, and `Connection.URI`), taken when an object is made,
+  and set for a `with` block. Their initial values may come from the environment (e.g. `HOST` from the `host` of the
+  `SUSA_SESSION` recipe, see `susa.utilities.environment`), which is how `LibvirtContainer` passes its defaults on to
+  processes started meanwhile; code otherwise never reads `os.environ`.
 - **Resources.** Anything with a lifetime is a `Resource` (`create()`/`destroy()`, a context manager). Factory methods
   return resources that aren't created yet.
 - **Models are values, entities are live.** Models build libvirt XML with chainable builders returning `Self`, and

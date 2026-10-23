@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import io
+import select
 from abc import ABC, abstractmethod
-from typing import Any, BinaryIO
+from concurrent.futures import Future, ThreadPoolExecutor
+from typing import IO, Any, BinaryIO
 
 from typing_extensions import override
 
@@ -33,6 +35,13 @@ class OutputStream(ABC):
             except EOFError:
                 return result
         raise TimeoutError(f"The stream didn't end within {timeout} seconds")
+
+    # In a thread, so that what writes it doesn't wait for it to be read (e.g. while it's waited for).
+    def read_all_in_background(self) -> Future[bytes]:
+        executor = ThreadPoolExecutor(1)
+        future = executor.submit(self.read_all)
+        executor.shutdown(wait=False)
+        return future
 
     def file(self, timeout: float | None = None) -> BinaryIO:
         return io.BufferedReader(OutputStreamFile(self, timeout))
@@ -93,3 +102,29 @@ class SavedOutputStream(OutputStream):
         result = self.stream.read(size=size, timeout=timeout)
         self.data += result
         return result
+
+
+# An unbuffered file (whose reads return whatever arrived), e.g. a pipe.
+class FileStream(InputOutputStream):
+    CHUNK_SIZE = 1 << 16
+
+    def __init__(self, handle: IO[bytes]) -> None:
+        self.handle = handle
+
+    @override
+    def read(self, size: int | None = None, timeout: float | None = 0) -> bytes:
+        if not select.select([self.handle], [], [], timeout)[0]:
+            return b""
+        data = self.handle.read(size or FileStream.CHUNK_SIZE)
+        if not data:
+            raise EOFError
+        return data
+
+    @override
+    def write(self, data: bytes) -> None:
+        while data:
+            data = data[self.handle.write(data) :]
+
+    @override
+    def close(self) -> None:
+        self.handle.close()
