@@ -1,0 +1,3 @@
+from PIL.Image import Image
+
+def image_to_string(image: Image) -> str: ...

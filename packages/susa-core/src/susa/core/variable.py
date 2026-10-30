@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import functools
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from typing import Any, Generic, TypeVar, overload
 
 T = TypeVar("T")
@@ -26,7 +26,7 @@ class Variable(Generic[T]):
         return self._values[-1] if self._values else self._default()
 
     @contextlib.contextmanager
-    def set(self, value: T) -> Iterator[None]:
+    def set(self, value: T) -> Generator[None, None, None]:
         self._values.append(value)
         try:
             yield

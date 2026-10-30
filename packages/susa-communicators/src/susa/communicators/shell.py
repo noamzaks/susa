@@ -7,7 +7,7 @@ import time
 from abc import abstractmethod
 from collections.abc import Callable
 from subprocess import CompletedProcess
-from typing import TypeAlias
+from typing import TYPE_CHECKING, TypeAlias
 
 import pexpect
 from pexpect.spawnbase import SpawnBase
@@ -156,7 +156,14 @@ class ShellCommunicator(CommandRunner):
         )
 
 
-class PexpectStream(SpawnBase):  # type: ignore
+# It's only generic in its stubs.
+if TYPE_CHECKING:
+    BytesSpawnBase = SpawnBase[bytes]
+else:
+    BytesSpawnBase = SpawnBase
+
+
+class PexpectStream(BytesSpawnBase):
     def __init__(self, stream: OutputStream) -> None:
         super().__init__()
         self.stream = stream

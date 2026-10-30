@@ -164,7 +164,7 @@ def test_machine_model_full(snapshot: Snapshot) -> None:
 
 
 def test_interface_model_random_mac() -> None:
-    macs = set()
+    macs: set[str] = set()
     for _ in range(10):
         mac = InterfaceModel().get_mac()
         assert re.fullmatch(r"52:54:00(:[0-9a-f]{2}){3}", mac)

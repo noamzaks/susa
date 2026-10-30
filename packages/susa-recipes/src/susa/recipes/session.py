@@ -18,7 +18,9 @@ class Session(pydantic.BaseModel, Resource, extra="forbid"):
     schema_: str | None = pydantic.Field(None, alias="$schema")
     objects: list[NamedRecipe]
     _made: dict[str, Any] = pydantic.PrivateAttr(default_factory=dict)
-    _created: list[tuple[str, Resource]] = pydantic.PrivateAttr(default_factory=list)
+    _created: list[tuple[str, Resource]] = pydantic.PrivateAttr(
+        default_factory=list[tuple[str, Resource]]
+    )
 
     @pydantic.model_validator(mode="after")
     def unique_names(self) -> Self:

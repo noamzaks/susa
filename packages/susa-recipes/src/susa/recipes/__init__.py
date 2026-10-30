@@ -7,10 +7,10 @@ import inspect
 import types
 import typing
 from collections.abc import Callable, Mapping
-from typing import Annotated, Any, Literal, Union
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Union
 
 import pydantic
-from typing_extensions import NotRequired, Self, TypedDict
+from typing_extensions import NotRequired, Self, TypedDict, TypeGuard
 
 PACKAGES = {
     "susa.utilities": ["susa.utilities.networking.SubnetReservation"],
@@ -88,7 +88,7 @@ def needs_arguments(method: Callable[..., Any]) -> bool:
 @functools.cache
 def arguments_type(method: Callable[..., Any]) -> Any:
     hints = typing.get_type_hints(method)
-    fields = {}
+    fields: dict[str, Any] = {}
     for p in parameters(method):
         field = argument_type(hints.get(p.name, Any))
         fields[p.name] = field if p.default is p.empty else NotRequired[field]
@@ -118,7 +118,7 @@ def step_type(name: str, method: Callable[..., Any]) -> Any:
     first = next(iter(parameters(method)), None)
 
     def by_name(value: Any) -> Any:
-        if first is None or isinstance(value, dict) and value.keys() <= names:
+        if first is None or is_dict(value) and value.keys() <= names:
             return value
         return {first.name: value}
 
@@ -155,8 +155,12 @@ def typed_dict(name: str, fields: dict[str, Any]) -> Any:
     return pydantic.with_config(config)(TypedDict(name, fields))  # type: ignore
 
 
+def is_dict(value: Any) -> TypeGuard[dict[str, Any]]:
+    return isinstance(value, dict)
+
+
 def single_key(value: Any) -> str | None:
-    if isinstance(value, dict) and len(value) == 1:
+    if is_dict(value) and len(value) == 1:
         return str(next(iter(value)))
     return None
 
@@ -174,10 +178,14 @@ def resolve_value(value: Any, objects: Mapping[str, Any]) -> Any:
 
 
 class Recipe(pydantic.RootModel[dict[str, Any]]):
-    root: Annotated[  # type: ignore
-        Union[tuple(recipe_type(n, c) for n, c in CLASSES.items())],  # noqa: UP007
-        pydantic.Discriminator(single_key),
-    ]
+    # Built at runtime from the classes recipes can make.
+    if TYPE_CHECKING:
+        root: dict[str, Any]
+    else:
+        root: Annotated[
+            Union[tuple(recipe_type(n, c) for n, c in CLASSES.items())],  # noqa: UP007
+            pydantic.Discriminator(single_key),
+        ]
 
     def make(self, **objects: Any) -> Any:
         [(name, recipe)] = self.root.items()

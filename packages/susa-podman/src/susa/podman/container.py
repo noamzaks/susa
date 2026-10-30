@@ -6,7 +6,7 @@ import os
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Generator, Mapping, Sequence
 from pathlib import Path
 
 from typing_extensions import override
@@ -105,7 +105,7 @@ class LibvirtContainer(Resource):
 
     @staticmethod
     @contextlib.contextmanager
-    def environment(variables: Mapping[str, str]) -> Iterator[None]:
+    def environment(variables: Mapping[str, str]) -> Generator[None, None, None]:
         previous = {name: os.environ.get(name) for name in variables}
         os.environ.update(variables)
         try:

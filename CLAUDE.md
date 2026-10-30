@@ -5,7 +5,7 @@ around libvirt/QEMU virtual machines of many architectures.
 
 ## Commands
 
-- `uv sync`, `uv run ruff check`, `uv run ruff format`, `uv run mypy` (strict).
+- `uv sync`, `uv run ruff check`, `uv run ruff format`, `uv run mypy` (strict), `uv run pyright` (strict).
 - What CI runs: `uv run pre-commit run --all-files`.
 - Always run tests with `scripts/test.sh` (pytest's arguments), which records each run for greendots in
   `/var/opt/greendots2/susa/<commit>-<n>` (the `susa` project).

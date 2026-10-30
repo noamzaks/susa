@@ -119,8 +119,7 @@ class Screenshot:
     def text(self) -> str:
         from pytesseract.pytesseract import image_to_string
 
-        text: str = image_to_string(self.image)
-        return text
+        return image_to_string(self.image)
 
 
 class Screenshottable(ABC):

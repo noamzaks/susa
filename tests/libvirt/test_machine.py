@@ -6,7 +6,7 @@ import os
 import random
 import shutil
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -173,8 +173,14 @@ def connection() -> Iterator[None]:
     scope="module",
     params=[pytest.param(n, marks=pytest.mark.xdist_group(n)) for n in IMAGES],
 )
-def session(request: pytest.FixtureRequest, connection: None) -> Iterator[Session]:
-    image = IMAGES[request.param]
+def name(request: pytest.FixtureRequest) -> str:
+    result: str = request.param
+    return result
+
+
+@pytest.fixture(scope="module")
+def session(name: str, connection: None) -> Iterator[Session]:
+    image = IMAGES[name]
     if not image.path.exists():
         pytest.skip(f"{image.path} doesn't exist")
     with Session.model_validate({"objects": image.session()}) as session:
@@ -187,12 +193,6 @@ def ready(session: Session) -> Iterator[LVSnapshot]:
     logging.info("Snapshotting the booted machine")
     with session.get("machine", LVMachine).snapshot() as snapshot:
         yield snapshot
-
-
-@pytest.fixture
-def name(request: pytest.FixtureRequest) -> str:
-    result: str = request.node.callspec.params["session"]
-    return result
 
 
 @pytest.fixture
@@ -236,7 +236,7 @@ def test_serial(machine: LVMachine) -> None:
 
 
 @contextlib.contextmanager
-def shell(machine: LVMachine, kind: str) -> Iterator[ShellCommunicator]:
+def shell(machine: LVMachine, kind: str) -> Generator[ShellCommunicator, None, None]:
     if shutil.which(CLIENTS.get(kind, "true")) is None:
         pytest.skip(f"There's no {CLIENTS[kind]} client")
     result: ShellCommunicator = Recipe.model_validate(COMMUNICATORS[kind]).make(
@@ -248,13 +248,15 @@ def shell(machine: LVMachine, kind: str) -> Iterator[ShellCommunicator]:
 
 
 @contextlib.contextmanager
-def unix(machine: LVMachine, kind: str) -> Iterator[UnixCommunicator]:
+def unix(machine: LVMachine, kind: str) -> Generator[UnixCommunicator, None, None]:
     with shell(machine, kind) as communicator, UnixCommunicator(communicator) as u:
         yield u
 
 
 @contextlib.contextmanager
-def transferrer(machine: LVMachine, kind: str) -> Iterator[FileTransferrer]:
+def transferrer(
+    machine: LVMachine, kind: str
+) -> Generator[FileTransferrer, None, None]:
     if kind in ("ssh", "ssh-scp"):
         with shell(machine, kind) as ssh:
             assert isinstance(ssh, FileTransferrer)

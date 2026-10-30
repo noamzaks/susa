@@ -4,6 +4,7 @@ from io import BytesIO
 
 from scapy.layers.inet import ICMP, IP
 from scapy.layers.l2 import Ether
+from scapy.packet import Packet
 from scapy.utils import PcapWriter
 from typing_extensions import override
 
@@ -28,7 +29,7 @@ class FakeSniffer(Sniffer):
 
 
 def test_packets() -> None:
-    sent = [Ether() / IP(dst=f"10.0.0.{i}") / ICMP() for i in range(3)]
+    sent: list[Packet] = [Ether() / IP(dst=f"10.0.0.{i}") / ICMP() for i in range(3)]
     pcap = BytesIO()
     writer = PcapWriter(pcap)
     writer.write(sent)

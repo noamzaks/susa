@@ -29,12 +29,17 @@ pytest-greendots = { git = "https://github.com/noamzaks/greendots", subdirectory
 strict = true
 files = ["packages/*/src", "tests"]
 explicit_package_bases = true
-mypy_path = ["packages/susa-core/src", "packages/susa-communicators/src", "packages/susa-libvirt/src", "packages/susa-podman/src", "packages/susa-recipes/src"]
+mypy_path = ["typings", "packages/susa-core/src", "packages/susa-communicators/src", "packages/susa-libvirt/src", "packages/susa-podman/src", "packages/susa-recipes/src"]
 enable_error_code = ["explicit-override"]
 # Abstract classes can be asked for (e.g. `cook(recipe, ShellCommunicator)`), as `isinstance` checks them.
 disable_error_code = ["type-abstract"]
 follow_untyped_imports = true
-untyped_calls_exclude = ["pytesseract"]
+
+[tool.pyright]
+include = ["packages", "tests"]
+typeCheckingMode = "strict"
+# libvirt and pytest-snapshot have none.
+reportMissingTypeStubs = false
 
 [tool.pytest.ini_options]
 addopts = ["--dist", "loadgroup"]
@@ -50,6 +55,7 @@ dev = [
     "mypy>=2.3.0",
     "pillow>=12.3.0",
     "pre-commit>=4.6.2",
+    "pyright>=1.1.414",
     "pytesseract>=0.3.13",
     "pytest>=9.1.1",
     "pytest-greendots",

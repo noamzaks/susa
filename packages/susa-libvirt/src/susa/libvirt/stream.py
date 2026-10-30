@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from typing import cast
 
 from typing_extensions import override
 
@@ -23,7 +24,7 @@ class LVStream(InputOutputStream):
         deadline = Deadline(timeout)
         while not self.eof:
             # -2 (despite its annotation) when there's nothing to read yet.
-            data: bytes | int = self.stream.recv(size or LVStream.CHUNK_SIZE)
+            data = cast("bytes | int", self.stream.recv(size or LVStream.CHUNK_SIZE))
             if isinstance(data, bytes):
                 self.eof = not data
                 if data:
