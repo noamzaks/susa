@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import platform
 import re
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,20 @@ def hosts(network: NetworkModel) -> dict[str | None, str]:
 @pytest.fixture(autouse=True)
 def fake_host_arch(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(platform, "machine", lambda: "x86_64")
+
+
+def fake_kvm(monkeypatch: pytest.MonkeyPatch, present: bool) -> None:
+    exists = Path.exists
+
+    def fake_exists(self: Path, **kwargs: bool) -> bool:
+        return present if self == Path("/dev/kvm") else exists(self, **kwargs)
+
+    monkeypatch.setattr(Path, "exists", fake_exists)
+
+
+@pytest.fixture(autouse=True)
+def without_kvm(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_kvm(monkeypatch, False)
 
 
 @pytest.fixture(autouse=True)
@@ -75,6 +90,40 @@ def test_machine_model_default_interface(snapshot: Snapshot, arch: str) -> None:
     NetworkModel("test").default().interface(interface)
     xml = MachineModel("test").arch(arch).default().interface(interface).build()
     snapshot.assert_match(xml, "domain.xml")
+
+
+def test_machine_model_default_with_kvm(
+    snapshot: Snapshot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_kvm(monkeypatch, True)
+    disk = DiskModel().source("somewhere")
+    xml = MachineModel("test").arch("x86_64").default().disk(disk).build()
+    snapshot.assert_match(xml, "domain.xml")
+
+
+@pytest.mark.parametrize(
+    ("host", "arch", "kvm", "expected"),
+    (
+        ("x86_64", "x86_64", True, "kvm"),
+        ("x86_64", "x86_64", False, "qemu"),
+        ("x86_64", "aarch64", True, "qemu"),
+        ("aarch64", "aarch64", True, "kvm"),
+        ("aarch64", "x86_64", True, "qemu"),
+        ("arm64", "aarch64", True, "kvm"),
+    ),
+)
+def test_machine_model_default_type(
+    monkeypatch: pytest.MonkeyPatch, host: str, arch: str, kvm: bool, expected: str
+) -> None:
+    monkeypatch.setattr(platform, "machine", lambda: host)
+    fake_kvm(monkeypatch, kvm)
+    domain = ET.fromstring(MachineModel("test").arch(arch).default().build())
+    assert domain.get("type") == expected
+    cpu = domain.find("cpu")
+    if expected == "kvm":
+        assert cpu is not None and cpu.get("mode") == "host-passthrough"
+    else:
+        assert cpu is None or cpu.get("mode") != "host-passthrough"
 
 
 def test_network_model_default(snapshot: Snapshot) -> None:
