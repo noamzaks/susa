@@ -24,4 +24,3 @@ module-name = "susa.podman"
 susa-communicators = { workspace = true }
 susa-core = { workspace = true }
 susa-libvirt = { workspace = true }
-pydantic-libvirt = { git = "https://github.com/noamzaks/pydantic-libvirt" }

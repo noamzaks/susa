@@ -9,8 +9,6 @@ requires-python = ">=3.10"
 dependencies = [
     "susa-core",
     "libvirt-python>=12.6.0",
-    "pydantic-libvirt",
-    "pydantic-xml>=2.21.1",
     "typing-extensions>=4.16.0",
 ]
 
@@ -23,4 +21,3 @@ module-name = "susa.libvirt"
 
 [tool.uv.sources]
 susa-core = { workspace = true }
-pydantic-libvirt = { git = "https://github.com/noamzaks/pydantic-libvirt" }

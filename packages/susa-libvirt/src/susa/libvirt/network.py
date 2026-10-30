@@ -26,8 +26,7 @@ class LVNetwork(LVEntity[lv.virNetwork, NetworkModel], Network, Sniffable):
     @override
     def interfaces(self) -> list[Interface]:
         # libvirt doesn't record which interfaces are connected to a network, only the IPs reserved for them.
-        hosts = self.model.get_hosts() or []
-        return [BasicInterface(h.mac, h.ip) for h in hosts if h.mac is not None]
+        return [BasicInterface(m, ip) for m, ip in self.model.get_hosts().items()]
 
     @override
     def create(self) -> None:

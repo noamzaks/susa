@@ -1,49 +1,37 @@
 from __future__ import annotations
 
-import pydantic_libvirt.domain as lvdomain
 from typing_extensions import Self
 
-from susa.libvirt.model import Model
+from susa.libvirt.model import Model, attribute, child, node, put
 from susa.utilities.networking import random_mac
 
 
-class InterfaceModel(Model[lvdomain.devices_interface]):
+class InterfaceModel(Model):
     QEMU_MAC_PREFIX = "52:54:00"
 
-    def __init__(
-        self,
-        mac: str | None = None,
-        xml_model: lvdomain.devices_interface | None = None,
-    ) -> None:
-        self.xml_model = xml_model or lvdomain.devices_interface(
-            type="network",
-            mac=lvdomain.mac(
-                address=mac or random_mac(prefix=InterfaceModel.QEMU_MAC_PREFIX)
-            ),
-        )
+    def __init__(self, mac: str | None = None) -> None:
+        address = mac or random_mac(prefix=InterfaceModel.QEMU_MAC_PREFIX)
+        self.element = node("interface", None, node("mac", address=address))
+        attribute(self.element, "type", "network")
 
     def mac(self, address: str) -> Self:
-        self.xml_model.mac = lvdomain.mac(address=address)
+        put(self.element, node("mac", address=address))
 
         return self
 
     def network(self, name: str) -> Self:
-        self.xml_model.source = lvdomain.interface_source(network=name)
+        put(self.element, node("source", network=name))
 
         return self
 
     def model(self, type: str) -> Self:
-        self.xml_model.model = lvdomain.interface_options_model(type=type)
+        put(self.element, node("model", type=type))
 
         return self
 
     def get_mac(self) -> str:
-        assert self.xml_model.mac is not None
-
-        return self.xml_model.mac.address
+        return child(self.element, "mac").attrib["address"]
 
     def get_network(self) -> str | None:
-        if self.xml_model.source is None:
-            return None
-
-        return self.xml_model.source.network
+        source = self.element.find("source")
+        return None if source is None else source.get("network")

@@ -49,9 +49,8 @@ def test_session() -> None:
         machine = session.get("machine", LVMachine)
         assert session.get("volume", LVVolume).value is not None
         assert machine.is_powered_on
-        [interface] = machine.model.get_interfaces() or []
-        assert interface.source is not None
-        assert interface.source.network == network.name
+        [interface] = machine.model.get_interfaces()
+        assert interface.get_network() == network.name
         # Made once the machine's created.
         assert session.get("named", MachineModel).get_name() == machine.ip
         with pytest.raises(AssertionError):

@@ -1,4 +1,4 @@
 <network>
-  <name>test</name>
   <bridge stp="off" />
+  <name>test</name>
 </network>

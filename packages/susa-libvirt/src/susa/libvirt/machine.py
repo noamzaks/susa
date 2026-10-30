@@ -81,10 +81,10 @@ class LVMachine(
     @property
     @override
     def interfaces(self) -> list[Interface]:
-        models = [
-            InterfaceModel(xml_model=i) for i in self.model.get_interfaces() or []
+        return [
+            BasicInterface(i.get_mac(), self.reserved_ip(i))
+            for i in self.model.get_interfaces()
         ]
-        return [BasicInterface(m.get_mac(), self.reserved_ip(m)) for m in models]
 
     @override
     def create(self) -> None:
@@ -170,5 +170,4 @@ class LVMachine(
             return None
 
         xml = self.conn.networkLookupByName(network).XMLDesc()
-        hosts = NetworkModel.parse(xml).get_hosts() or []
-        return next((h.ip for h in hosts if h.mac == interface.get_mac()), None)
+        return NetworkModel.parse(xml).get_hosts().get(interface.get_mac())

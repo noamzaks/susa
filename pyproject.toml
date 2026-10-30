@@ -23,7 +23,6 @@ susa-communicators = { workspace = true }
 susa-libvirt = { workspace = true }
 susa-podman = { workspace = true }
 susa-recipes = { workspace = true }
-pydantic-libvirt = { git = "https://github.com/noamzaks/pydantic-libvirt" }
 pytest-greendots = { git = "https://github.com/noamzaks/greendots", subdirectory = "pytest-greendots" }
 
 [tool.mypy]

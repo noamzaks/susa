@@ -18,10 +18,6 @@ from susa.utilities.generic import GIGA
 MAC = "52:54:00:12:34:56"
 
 
-def hosts(network: NetworkModel) -> dict[str | None, str]:
-    return {host.mac: host.ip for host in network.get_hosts() or []}
-
-
 # Keep the XML independent of the machine the tests run on.
 @pytest.fixture(autouse=True)
 def fake_host_arch(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -185,17 +181,17 @@ def test_interface_model_parse_keeps_mac() -> None:
 @pytest.mark.parametrize("arch", ARCH_DEFAULTS)
 def test_machine_model_interface_default_nic(arch: str) -> None:
     machine = MachineModel("test").arch(arch).interface(InterfaceModel(mac=MAC))
-    [interface] = machine.get_interfaces() or []
-    assert interface.model is not None
-    assert interface.model.type == ARCH_DEFAULTS[arch].nic
+    [interface] = machine.get_interfaces()
+    assert (
+        interface.element.find(f"model[@type='{ARCH_DEFAULTS[arch].nic}']") is not None
+    )
 
 
 def test_network_model_interface_without_ip(snapshot: Snapshot) -> None:
     interface = InterfaceModel(mac=MAC)
     network = NetworkModel("test").default()
     network.interface(interface)
-    assert interface.xml_model.source is not None
-    assert interface.xml_model.source.network == "test"
+    assert interface.get_network() == "test"
     snapshot.assert_match(network.build(), "network.xml")
 
 
@@ -209,9 +205,8 @@ def test_network_model_interface_with_ip(snapshot: Snapshot) -> None:
     interface = InterfaceModel(mac=MAC)
     network = NetworkModel("test").default().ip("10.0.0.1")
     assert network.interface(interface, "10.0.0.10") is network
-    assert interface.xml_model.source is not None
-    assert interface.xml_model.source.network == "test"
-    assert hosts(network) == {MAC: "10.0.0.10"}
+    assert interface.get_network() == "test"
+    assert network.get_hosts() == {MAC: "10.0.0.10"}
     snapshot.assert_match(network.build(), "network.xml")
 
 
@@ -221,7 +216,7 @@ def test_network_model_interface_picks_free_ips() -> None:
     network.interface(InterfaceModel(mac="52:54:00:00:00:02"))
     network.interface(InterfaceModel(mac="52:54:00:00:00:03"))
     network.interface(InterfaceModel(mac="52:54:00:00:00:04"))
-    assert hosts(network) == {
+    assert network.get_hosts() == {
         "52:54:00:00:00:01": "10.0.0.3",
         # The gateway (10.0.0.1) isn't in the DHCP range, and 10.0.0.3 is taken.
         "52:54:00:00:00:02": "10.0.0.2",
@@ -233,14 +228,14 @@ def test_network_model_interface_picks_free_ips() -> None:
 def test_network_model_interface_picks_ip_below_gateway() -> None:
     network = NetworkModel("test").default().ip("10.0.0.254")
     network.interface(InterfaceModel(mac=MAC))
-    assert hosts(network) == {MAC: "10.0.0.1"}
+    assert network.get_hosts() == {MAC: "10.0.0.1"}
 
 
 def test_network_model_interface_no_free_ip() -> None:
     # A /30 has only 2 hosts, one of which is the gateway.
     network = NetworkModel("test").default().ip("10.0.0.1", "255.255.255.252")
     network.interface(InterfaceModel(mac="52:54:00:00:00:01"))
-    assert hosts(network) == {"52:54:00:00:00:01": "10.0.0.2"}
+    assert network.get_hosts() == {"52:54:00:00:00:01": "10.0.0.2"}
     with pytest.raises(RuntimeError):
         network.interface(InterfaceModel(mac="52:54:00:00:00:02"))
 
@@ -248,14 +243,14 @@ def test_network_model_interface_no_free_ip() -> None:
 def test_machine_model_interface_keeps_address() -> None:
     interface = InterfaceModel(mac=MAC)
     domain = MachineModel("test").arch("mips").default().interface(interface)
-    assert interface.xml_model.address is not None
-    assert interface.xml_model.address.slot == 12
+    assert interface.element.find("address[@slot='12']") is not None
 
     other = InterfaceModel.parse(interface.build())
-    assert other.xml_model.address is not None
-    other.xml_model.address.slot = 5
+    address = other.element.find("address")
+    assert address is not None
+    address.set("slot", "5")
     domain.interface(other)
-    assert other.xml_model.address.slot == 5
+    assert address.get("slot") == "5"
 
 
 def test_interface_model_getters() -> None:
@@ -270,17 +265,17 @@ def test_interface_model_getters() -> None:
 def test_network_model_getters() -> None:
     network = NetworkModel("test")
     assert network.get_name() == "test"
-    assert hosts(network) == {}
-    assert hosts(network).get(MAC) is None
+    assert network.get_hosts() == {}
+    assert network.get_hosts().get(MAC) is None
 
     network.ip("10.0.0.1")
-    assert hosts(network) == {}
+    assert network.get_hosts() == {}
 
     network.interface(InterfaceModel(mac=MAC), "10.0.0.10")
     network.interface(InterfaceModel(mac="52:54:00:00:00:01"))
-    assert hosts(network) == {MAC: "10.0.0.10", "52:54:00:00:00:01": "10.0.0.2"}
-    assert hosts(network).get(MAC) == "10.0.0.10"
-    assert hosts(network).get("52:54:00:00:00:02") is None
+    assert network.get_hosts() == {MAC: "10.0.0.10", "52:54:00:00:00:01": "10.0.0.2"}
+    assert network.get_hosts().get(MAC) == "10.0.0.10"
+    assert network.get_hosts().get("52:54:00:00:00:02") is None
 
 
 def test_network_model_getters_after_parse() -> None:
@@ -288,7 +283,7 @@ def test_network_model_getters_after_parse() -> None:
     network.interface(InterfaceModel(mac=MAC), "10.0.0.10")
     parsed = NetworkModel.parse(network.build())
     assert parsed.get_name() == "test"
-    assert hosts(parsed).get(MAC) == "10.0.0.10"
+    assert parsed.get_hosts().get(MAC) == "10.0.0.10"
 
 
 def test_machine_model_getters() -> None:
@@ -300,7 +295,7 @@ def test_machine_model_getters() -> None:
     domain.interface(InterfaceModel(mac=MAC)).interface(
         InterfaceModel(mac="52:54:00:00:00:01")
     )
-    assert [i.mac.address for i in domain.get_interfaces() or [] if i.mac] == [
+    assert [i.get_mac() for i in domain.get_interfaces()] == [
         MAC,
         "52:54:00:00:00:01",
     ]

@@ -1,36 +1,61 @@
 from __future__ import annotations
 
-import typing
+import bisect
 import xml.etree.ElementTree as ET
-from abc import ABC, abstractmethod
-from typing import Generic, TypeVar
 
-import pydantic_xml
-from typing_extensions import Self, get_original_bases, override
-
-T = TypeVar("T", bound=pydantic_xml.BaseXmlModel)
+from typing_extensions import Self, override
 
 
-class Model(ABC, Generic[T]):
-    xml_model: T
+def node(
+    tag: str, text: str | None = None, /, *children: ET.Element, **attributes: str
+) -> ET.Element:
+    element = ET.Element(tag, dict(sorted(attributes.items())))
+    element.text = text
+    for other in children:
+        add(element, other)
+    return element
 
-    @abstractmethod
-    def __init__(self, xml_model: T | None = None) -> None: ...
+
+# Children are sorted by tag and attributes by name, so that the XML doesn't depend on the order the builders ran in.
+def add(parent: ET.Element, element: ET.Element) -> None:
+    index = bisect.bisect_right(parent, element.tag, key=lambda other: other.tag)
+    parent.insert(index, element)
+
+
+def attribute(element: ET.Element, name: str, value: str) -> None:
+    element.set(name, value)
+    element.attrib = dict(sorted(element.attrib.items()))
+
+
+def child(parent: ET.Element, path: str) -> ET.Element:
+    element = parent.find(path)
+    assert element is not None, f"There's no {path} in {parent.tag}!"
+    return element
+
+
+def put(parent: ET.Element, element: ET.Element) -> None:
+    for other in parent.findall(element.tag):
+        parent.remove(other)
+    add(parent, element)
+
+
+class Model:
+    element: ET.Element
 
     def build(self) -> str:
-        tree = self.xml_model.to_xml_tree(exclude_none=True)
-        ET.indent(tree)
-        return ET.tostring(tree, encoding="unicode")
+        ET.indent(self.element)
+        return ET.tostring(self.element, encoding="unicode")
+
+    # Models' constructor arguments are all optional.
+    @classmethod
+    def of(cls, element: ET.Element) -> Self:
+        model = cls()
+        model.element = element
+        return model
 
     @classmethod
     def parse(cls, xml: str | bytes) -> Self:
-        return cls(xml_model=cls.xml_model_type().from_xml(xml))
-
-    @classmethod
-    def xml_model_type(cls) -> type[T]:
-        [base] = get_original_bases(cls)
-        [xml_model_type] = typing.get_args(base)
-        return typing.cast("type[T]", xml_model_type)
+        return cls.of(ET.fromstring(xml))
 
     @override
     def __eq__(self, other: object) -> bool:

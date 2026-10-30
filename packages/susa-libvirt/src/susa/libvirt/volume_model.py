@@ -2,26 +2,25 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pydantic_libvirt.storagevol as lvstoragevol
 from typing_extensions import Self
 
-from susa.libvirt.model import Model
+from susa.libvirt.model import Model, child, node, put
 from susa.utilities.generic import random_id
 
 
-class VolumeModel(Model[lvstoragevol.vol]):
-    def __init__(
-        self, name: str | None = None, xml_model: lvstoragevol.vol | None = None
-    ) -> None:
-        self.xml_model = xml_model or lvstoragevol.vol(
-            name=lvstoragevol.name(value=name or f"susa-{random_id(10)}"),
-            target=lvstoragevol.target(format=lvstoragevol.format(type="qcow2")),
+class VolumeModel(Model):
+    def __init__(self, name: str | None = None) -> None:
+        self.element = node(
+            "volume",
+            None,
+            node("name", name or f"susa-{random_id(10)}"),
+            node("target", None, node("format", type="qcow2")),
         )
         # The volume's XML doesn't say which pool it's in.
         self.pool_name = "default"
 
     def name(self, name: str) -> Self:
-        self.xml_model.name = lvstoragevol.name(value=name)
+        put(self.element, node("name", name))
 
         return self
 
@@ -31,20 +30,27 @@ class VolumeModel(Model[lvstoragevol.vol]):
         return self
 
     def capacity(self, capacity: int) -> Self:
-        self.xml_model.capacity = lvstoragevol.capacity(value=capacity, unit="B")
+        put(self.element, node("capacity", str(capacity), unit="B"))
 
         return self
 
     def backing(self, image: str | Path) -> Self:
-        self.xml_model.backing_store = lvstoragevol.backing_store(
-            path=lvstoragevol.backing_store_path(value=str(Path(image).resolve())),
-            format=lvstoragevol.format(type="qcow2"),
+        put(
+            self.element,
+            node(
+                "backingStore",
+                None,
+                node("path", str(Path(image).resolve())),
+                node("format", type="qcow2"),
+            ),
         )
 
         return self
 
     def get_name(self) -> str:
-        return self.xml_model.name.value
+        name = child(self.element, "name").text
+        assert name is not None
+        return name
 
     def get_pool(self) -> str:
         return self.pool_name

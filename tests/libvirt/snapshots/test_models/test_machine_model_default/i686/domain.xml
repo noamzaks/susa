@@ -1,26 +1,26 @@
 <domain xmlns:qemu="http://libvirt.org/schemas/domain/qemu/1.0" type="qemu">
+  <devices>
+    <console type="pty" />
+    <controller index="0" type="usb" />
+    <disk device="disk" type="file">
+      <driver name="qemu" type="qcow2" />
+      <source file="/fake/cwd/somewhere" />
+      <target bus="sata" dev="sda" />
+    </disk>
+    <graphics port="-1" type="vnc" />
+    <input bus="usb" type="tablet" />
+    <input bus="usb" type="keyboard" />
+    <video>
+      <model type="virtio" />
+    </video>
+  </devices>
+  <features>
+    <acpi />
+  </features>
   <name>test</name>
   <os>
     <type arch="i686" machine="q35">hvm</type>
   </os>
-  <features>
-    <acpi />
-  </features>
-  <devices>
-    <disk device="disk" type="file">
-      <source file="/fake/cwd/somewhere" />
-      <driver name="qemu" type="qcow2" />
-      <target dev="sda" bus="sata" />
-    </disk>
-    <controller index="0" type="usb" />
-    <input type="tablet" bus="usb" />
-    <input type="keyboard" bus="usb" />
-    <graphics type="vnc" port="-1" />
-    <video>
-      <model type="virtio" />
-    </video>
-    <console type="pty" />
-  </devices>
   <qemu:commandline>
     <qemu:arg value="-cpu" />
     <qemu:arg value="qemu32,family=4" />

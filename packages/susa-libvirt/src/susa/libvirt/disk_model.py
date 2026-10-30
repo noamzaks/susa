@@ -1,44 +1,41 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, cast
 
-import pydantic_libvirt.domain as lvdomain
 from typing_extensions import Self
 
-from susa.libvirt.model import Model
+from susa.libvirt.model import Model, attribute, child, node, put
 from susa.libvirt.volume_model import VolumeModel
 
 
-class DiskModel(Model[lvdomain.disk]):
-    def __init__(self, xml_model: lvdomain.disk | None = None) -> None:
-        self.xml_model = xml_model or lvdomain.disk(
-            type="file",
-            device="disk",
+class DiskModel(Model):
+    def __init__(self) -> None:
+        self.element = node(
+            "disk",
+            None,
             # Overridden when added to a `MachineModel`.
-            target=lvdomain.disk_target(dev="sda"),
+            node("target", dev="sda"),
+            device="disk",
+            type="file",
         )
 
     def source(self, path: str | Path, format: str = "qcow2") -> Self:
-        self.xml_model.driver = lvdomain.disk_driver(
-            name="qemu", type=cast(Any, format)
-        )
-        self.xml_model.source = lvdomain.devices_disk_source(
-            file=str(Path(path).resolve())
-        )
+        put(self.element, node("driver", name="qemu", type=format))
+        put(self.element, node("source", file=str(Path(path).resolve())))
 
         return self
 
     def bus(self, bus: str) -> Self:
-        self.xml_model.target.bus = cast(Any, bus)
+        attribute(child(self.element, "target"), "bus", bus)
 
         return self
 
     def volume(self, volume: VolumeModel) -> Self:
-        self.xml_model.type = "volume"
-        self.xml_model.driver = lvdomain.disk_driver(name="qemu", type="qcow2")
-        self.xml_model.source = lvdomain.devices_disk_source(
-            pool=volume.get_pool(), volume=volume.get_name()
+        attribute(self.element, "type", "volume")
+        put(self.element, node("driver", name="qemu", type="qcow2"))
+        put(
+            self.element,
+            node("source", pool=volume.get_pool(), volume=volume.get_name()),
         )
 
         return self

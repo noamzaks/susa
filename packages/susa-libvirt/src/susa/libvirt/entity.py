@@ -9,7 +9,7 @@ from susa.libvirt.connection import Connection
 from susa.libvirt.model import Model
 
 T = TypeVar("T")
-M = TypeVar("M", bound=Model[Any])
+M = TypeVar("M", bound=Model)
 
 
 class LVEntity(ABC, Generic[T, M]):

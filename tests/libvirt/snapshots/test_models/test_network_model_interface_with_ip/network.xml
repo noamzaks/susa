@@ -1,5 +1,4 @@
 <network>
-  <name>test</name>
   <bridge stp="off" />
   <dns>
     <host ip="10.0.0.1">
@@ -8,8 +7,9 @@
   </dns>
   <ip address="10.0.0.1" netmask="255.255.255.0">
     <dhcp>
-      <range start="10.0.0.2" end="10.0.0.254" />
-      <host mac="52:54:00:12:34:56" ip="10.0.0.10" />
+      <host ip="10.0.0.10" mac="52:54:00:12:34:56" />
+      <range end="10.0.0.254" start="10.0.0.2" />
     </dhcp>
   </ip>
+  <name>test</name>
 </network>
