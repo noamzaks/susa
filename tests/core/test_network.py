@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import sys
 from io import BytesIO
 
+import pytest
 from scapy.layers.inet import ICMP, IP
 from scapy.layers.l2 import Ether
 from scapy.packet import Packet
 from scapy.utils import PcapWriter
 from typing_extensions import override
 
-from susa.core.network import Sniffer
+from susa.core.network import CommandSniffer, Sniffer
 
 
 class FakeSniffer(Sniffer):
@@ -38,3 +40,9 @@ def test_packets() -> None:
     sniffer = FakeSniffer(pcap.getvalue(), 7)
     assert sniffer.next_packet()[IP].dst == "10.0.0.0"
     assert [p[IP].dst for p in sniffer.packets()] == ["10.0.0.1", "10.0.0.2"]
+
+
+def test_command_sniffer_doesnt_need_scapy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "scapy.utils", None)
+    with CommandSniffer("printf capture") as sniffer:
+        assert sniffer.read_all(5) == b"capture"

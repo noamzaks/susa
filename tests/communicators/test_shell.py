@@ -1,19 +1,18 @@
 from __future__ import annotations
 
 import random
-import re
 from collections.abc import Iterator
 from pathlib import Path
 from subprocess import CalledProcessError, CompletedProcess
 
-import pexpect
 import pytest
 from typing_extensions import override
 
-from susa.communicators.shell import PexpectStream, Prelude, ShellCommunicator
+from susa.communicators.shell import Prelude, ShellCommunicator
 from susa.communicators.unix import UnixCommunicator
 from susa.core.communicator import CommandRunner
-from susa.core.stream import InputOutputStream, OutputStream
+from susa.core.machine import CommandSerial
+from susa.core.stream import InputOutputStream
 
 SHELLS = {
     "bash": ["bash", "--norc", "--noprofile", "-i"],
@@ -28,31 +27,10 @@ class LocalShell(ShellCommunicator):
 
     @override
     def open_stream(self) -> InputOutputStream:
-        return TerminalStream(self.argv)
-
-
-# A program in a pseudo-terminal, as ShellCommunicator expects (like a serial console's shell, or ssh's with `-tt`):
-# without one, e.g. bash doesn't take "\r" as the end of a line.
-class TerminalStream(InputOutputStream):
-    def __init__(self, argv: list[str]) -> None:
-        self.process: pexpect.spawn[bytes] = pexpect.spawn(argv[0], argv[1:])
-
-    @override
-    def read(self, size: int | None = None, timeout: float | None = 0) -> bytes:
-        try:
-            return self.process.read_nonblocking(size or self.process.maxread, timeout)
-        except pexpect.TIMEOUT:
-            return b""
-        except pexpect.EOF:
-            raise EOFError from None
-
-    @override
-    def write(self, data: bytes) -> None:
-        self.process.send(data)
-
-    @override
-    def close(self) -> None:
-        self.process.close()
+        # A terminal, as ShellCommunicator expects: without one, e.g. bash doesn't take "\r" as the end of a line.
+        stream = CommandSerial(self.argv)
+        stream.create()
+        return stream
 
 
 @pytest.fixture(params=list(SHELLS))
@@ -207,21 +185,3 @@ def test_discarded_input(
     shell.quiet_time = 0.2
     with shell:
         assert shell.run("echo exact").stdout == b"exact\n"
-
-
-class BufferedStream(OutputStream):
-    def __init__(self, *chunks: bytes) -> None:
-        self.chunks = list(chunks)
-
-    @override
-    def read(self, size: int | None = None, timeout: float | None = 0) -> bytes:
-        return self.chunks.pop(0) if self.chunks else b""
-
-
-def test_expect() -> None:
-    stream = PexpectStream(BufferedStream(b"booting\r\nsusa lo", b"gin: after"))
-    assert stream.expect([rb"login: ", rb"Password: "], timeout=1) == 0
-    assert stream.before == b"booting\r\nsusa "
-    assert stream.expect(rb"af(t)er", timeout=1) == 0
-    assert isinstance(stream.match, re.Match)
-    assert stream.match.group(1) == b"t"

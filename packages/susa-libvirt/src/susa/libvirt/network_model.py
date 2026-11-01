@@ -4,19 +4,19 @@ import ipaddress
 
 from typing_extensions import Self
 
-from susa.libvirt.interface_model import InterfaceModel
-from susa.libvirt.model import Model, add, child, node, put
+from susa.libvirt.interface_model import LVInterfaceModel
+from susa.libvirt.model import LVModel, add, child, node, put
 from susa.utilities.generic import random_id
 
 
-class NetworkModel(Model):
+class LVNetworkModel(LVModel):
     def __init__(self, name: str | None = None) -> None:
         self.element = node(
-            "network", None, node("name", name or f"susa-{random_id(10)}")
+            "network", elements=[node("name", text=name or f"susa-{random_id(10)}")]
         )
 
     def name(self, name: str) -> Self:
-        put(self.element, node("name", name))
+        put(self.element, node("name", text=name))
 
         return self
 
@@ -26,7 +26,7 @@ class NetworkModel(Model):
         netmask: str = "255.255.255.0",
         dhcp: bool = True,
     ) -> Self:
-        ip = node("ip", address=address, netmask=netmask)
+        ip = node("ip", attrs={"address": address, "netmask": netmask})
         if dhcp:
             network = ipaddress.IPv4Network(f"{address}/{netmask}", strict=False)
             own = ipaddress.IPv4Address(address)
@@ -38,28 +38,31 @@ class NetworkModel(Model):
                 ip,
                 node(
                     "dhcp",
-                    None,
-                    *(
-                        node("range", start=str(start), end=str(end))
-                        for start, end in ranges
-                        if start <= end
-                    ),
+                    elements=[
+                        *(
+                            node("range", attrs={"start": str(start), "end": str(end)})
+                            for start, end in ranges
+                            if start <= end
+                        )
+                    ],
                 ),
             )
         put(self.element, ip)
 
         # Guests can resolve the host's address (which e.g. some rlogin servers require of clients).
-        host = node("host", None, node("hostname", "host"), ip=address)
-        put(self.element, node("dns", None, host))
+        host = node(
+            "host", elements=[node("hostname", text="host")], attrs={"ip": address}
+        )
+        put(self.element, node("dns", elements=[host]))
 
         return self
 
     def nat(self) -> Self:
-        put(self.element, node("forward", mode="nat"))
+        put(self.element, node("forward", attrs={"mode": "nat"}))
 
         return self
 
-    def interface(self, interface: InterfaceModel, ip: str | None = None) -> Self:
+    def interface(self, interface: LVInterfaceModel, ip: str | None = None) -> Self:
         interface.network(self.get_name())
         dhcp = self.element.find("ip/dhcp")
         if dhcp is None:
@@ -75,12 +78,12 @@ class NetworkModel(Model):
             ip = next((str(a) for a in network.hosts() if str(a) not in used), None)
             if ip is None:
                 raise RuntimeError(f"There's no free IP left in {self.get_name()}")
-        add(dhcp, node("host", mac=interface.get_mac(), ip=ip))
+        add(dhcp, node("host", attrs={"mac": interface.get_mac(), "ip": ip}))
 
         return self
 
     def default(self) -> Self:
-        put(self.element, node("bridge", stp="off"))
+        put(self.element, node("bridge", attrs={"stp": "off"}))
 
         return self
 

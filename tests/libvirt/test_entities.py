@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import pickle
-from collections.abc import Generator
+import subprocess
 from typing import Any
 
-import libvirt as lv
 import pytest
 
 from susa.core.interface import Interface
@@ -13,68 +12,59 @@ from susa.core.machine import (
     Machine,
     Powerable,
     Screenshottable,
-    SerialAccessible,
     Snapshot,
 )
 from susa.core.network import Network
-from susa.libvirt.connection import Connection
-from susa.libvirt.disk_model import DiskModel
+from susa.libvirt._virsh import virsh
+from susa.libvirt.disk_model import LVDiskModel
 from susa.libvirt.entity import LVEntity
-from susa.libvirt.interface_model import InterfaceModel
+from susa.libvirt.interface_model import LVInterfaceModel
 from susa.libvirt.machine import (
     LVMachine,
     LVSnapshot,
 )
-from susa.libvirt.machine_model import MachineModel
+from susa.libvirt.machine_model import LVMachineModel
 from susa.libvirt.network import LVNetwork
-from susa.libvirt.network_model import NetworkModel
+from susa.libvirt.network_model import LVNetworkModel
 from susa.libvirt.volume import LVVolume
-from susa.libvirt.volume_model import VolumeModel
+from susa.libvirt.volume_model import LVVolumeModel
 from susa.utilities.generic import GIGA
 
 MAC = "52:54:00:12:34:56"
 
 
-@pytest.fixture(autouse=True)
-def connection() -> Generator[None, None, None]:
-    with Connection("test:///default"):
-        yield
+pytestmark = [
+    pytest.mark.usefixtures("libvirt"),
+    pytest.mark.xdist_group("test_entities"),
+]
 
 
-def conn() -> lv.virConnect:
-    result = Connection.current().conn
-    assert result is not None
-    return result
-
-
-def domain(*interfaces: InterfaceModel) -> MachineModel:
-    result = MachineModel().arch("x86_64").default().memory(GIGA)
+def domain(*interfaces: LVInterfaceModel) -> LVMachineModel:
+    result = LVMachineModel().arch("x86_64").default().memory(GIGA // 4)
     for interface in interfaces:
         result.interface(interface)
     return result
 
 
 def test_network() -> None:
-    model = NetworkModel().default().ip("10.0.0.1")
+    model = LVNetworkModel().default().ip("10.0.0.1")
     network = LVNetwork(model)
     assert isinstance(network, Network)
     assert network.model is model
     assert network.name == model.get_name()
 
     with network:
-        assert network.value is not None
-        assert network.value.name() == network.name
-        assert network.value.isActive()
-    assert network.value is None
+        assert network.name in virsh("net-list", "--name")
+    assert network.name not in virsh("net-list", "--name")
 
 
 def test_network_interfaces() -> None:
-    model = NetworkModel().default().ip("10.0.0.1")
+    model = LVNetworkModel().default().ip("10.0.0.1")
     network = LVNetwork(model)
     assert network.interfaces == []
 
-    model.interface(InterfaceModel(mac=MAC), "10.0.0.10")
-    model.interface(InterfaceModel(mac="52:54:00:00:00:01"))
+    model.interface(LVInterfaceModel(mac=MAC), "10.0.0.10")
+    model.interface(LVInterfaceModel(mac="52:54:00:00:00:01"))
 
     with network:
         interfaces = network.interfaces
@@ -86,8 +76,8 @@ def test_network_interfaces() -> None:
 
 
 def test_network_and_machine_interfaces_match() -> None:
-    network = NetworkModel().default().ip("10.0.0.1")
-    interface = InterfaceModel(mac=MAC)
+    network = LVNetworkModel().default().ip("10.0.0.1")
+    interface = LVInterfaceModel(mac=MAC)
     network.interface(interface)
 
     with LVNetwork(network) as n, LVMachine(domain(interface)) as m:
@@ -104,17 +94,14 @@ def test_machine() -> None:
     assert machine.name == model.get_name()
 
     with machine:
-        assert machine.value is not None
-        assert machine.value.name() == machine.name
-        assert machine.value.isActive()
+        assert machine.is_powered_on
         assert machine.interfaces == []
-    assert machine.value is None
 
 
 def test_machine_interfaces() -> None:
-    network = NetworkModel().default().ip("10.0.0.1")
-    reserved = InterfaceModel(mac=MAC)
-    automatic = InterfaceModel(mac="52:54:00:00:00:01")
+    network = LVNetworkModel().default().ip("10.0.0.1")
+    reserved = LVInterfaceModel(mac=MAC)
+    automatic = LVInterfaceModel(mac="52:54:00:00:00:01")
     network.interface(reserved, "10.0.0.10").interface(automatic)
 
     with (
@@ -131,8 +118,8 @@ def test_machine_interfaces() -> None:
 
 def test_interface_without_reservation() -> None:
     # The interface is connected to the network, but the network has no DHCP to reserve an IP with.
-    network = NetworkModel().default().ip("10.0.0.1", dhcp=False)
-    interface = InterfaceModel(mac=MAC)
+    network = LVNetworkModel().default().ip("10.0.0.1", dhcp=False)
+    interface = LVInterfaceModel(mac=MAC)
     network.interface(interface)
 
     with LVNetwork(network), LVMachine(domain(interface)) as machine:
@@ -150,9 +137,8 @@ def test_machine_is_persistent_until_destroyed() -> None:
         # Still defined, so it can be powered on again.
         machine.power_on()
         assert machine.is_powered_on
-    assert machine.value is None
-    with pytest.raises(lv.libvirtError):
-        conn().lookupByName(name)
+    with pytest.raises(subprocess.CalledProcessError):
+        virsh("dominfo", name)
 
 
 def test_machine_power() -> None:
@@ -163,8 +149,7 @@ def test_machine_power() -> None:
         assert machine.is_powered_on
         machine.reset()
         assert machine.is_powered_on
-        # The mock driver's guests shut down instantly.
-        machine.shutdown()
+        machine.power_off()
         assert not machine.is_powered_on
         machine.power_on()
         assert machine.is_powered_on
@@ -174,7 +159,6 @@ def test_machine_destroy_when_powered_off() -> None:
     machine = LVMachine(domain())
     with machine:
         machine.power_off()
-    assert machine.value is None
 
 
 def test_machine_screenshot() -> None:
@@ -185,34 +169,24 @@ def test_machine_screenshot() -> None:
         assert screenshot.data.startswith(b"\x89PNG\r\n\x1a\n")
 
 
-def test_machine_serial_needs_created_machine() -> None:
-    machine = LVMachine(domain())
-    assert isinstance(machine, SerialAccessible)
-    with pytest.raises(AssertionError):
-        machine.serial().create()
-
-
 def test_snapshot() -> None:
-    with LVMachine(domain()) as machine:
+    volume = LVVolumeModel().capacity(GIGA)
+    with LVVolume(volume), LVMachine(domain().volume(volume)) as machine:
         snapshot = machine.snapshot()
         assert isinstance(snapshot, Snapshot)
         assert isinstance(snapshot, LVSnapshot)
         assert snapshot.machine is machine
-        assert snapshot.value is None
         snapshot.create()
-        assert snapshot.value is not None
-        assert machine.value is not None
 
         snapshot.destroy()
-        assert snapshot.value is None
-        assert machine.domain.snapshotListNames() == []
+        assert virsh("snapshot-list", machine.name, "--name").strip() == ""
 
 
 def test_snapshot_context() -> None:
-    with LVMachine(domain()) as machine:
-        with machine.snapshot() as snapshot:
+    volume = LVVolumeModel().capacity(GIGA)
+    with LVVolume(volume), LVMachine(domain().volume(volume)) as machine:
+        with machine.snapshot():
             machine.power_off()
-        assert snapshot.value is None
         assert machine.is_powered_on
 
 
@@ -224,43 +198,25 @@ def test_machine_press() -> None:
 
 
 def test_volume() -> None:
-    model = VolumeModel().pool("default-pool").capacity(GIGA)
-    with LVVolume(model) as volume:
-        assert volume.value is not None
-        assert volume.value.name() == model.get_name()
-    pool = conn().storagePoolLookupByName("default-pool")
-    assert model.get_name() not in pool.listVolumes()
+    model = LVVolumeModel().capacity(GIGA)
+    with LVVolume(model):
+        assert model.get_name() in virsh("vol-list", "default")
+    assert model.get_name() not in virsh("vol-list", "default")
 
 
 def test_machine_volume() -> None:
-    volume = VolumeModel().pool("default-pool").capacity(GIGA)
-    model = domain().disk(DiskModel().volume(volume))
+    volume = LVVolumeModel().capacity(GIGA)
+    model = domain().disk(LVDiskModel().volume(volume))
     with LVVolume(volume), LVMachine(model) as machine:
         assert machine.is_powered_on
 
 
-def test_nested_connection() -> None:
-    outer = Connection.current()
-    with Connection("test:///default") as inner:
-        assert Connection.current() is inner
-    assert Connection.current() is outer
-
-
 def test_pickle() -> None:
-    network = LVNetwork(NetworkModel().default().ip("10.0.0.1"))
-    volume = LVVolume(VolumeModel().pool("default-pool").capacity(GIGA))
-    machine = LVMachine(domain())
+    network = LVNetwork(LVNetworkModel().default().ip("10.0.0.1"))
+    volume_model = LVVolumeModel().capacity(GIGA)
+    volume = LVVolume(volume_model)
+    machine = LVMachine(domain().volume(volume_model))
     snapshot = machine.snapshot()
-    entities: list[LVEntity[Any, Any]] = [network, volume, machine, snapshot]
-    with network, volume, machine, snapshot:
-        for entity, copy in zip(entities, pickle.loads(pickle.dumps(entities))):
-            assert copy.model == entity.model
-            assert copy.value is not None
-            assert copy.connection is Connection.current()
-    assert pickle.loads(pickle.dumps(machine)).value is None
-
-
-def test_unpickle_connection() -> None:
-    pickled = pickle.dumps(Connection.current())
-    with Connection("test:///default") as inner:
-        assert pickle.loads(pickled) is inner
+    entities: list[LVEntity[Any]] = [network, volume, machine, snapshot]
+    for entity, copy in zip(entities, pickle.loads(pickle.dumps(entities))):
+        assert copy.model == entity.model

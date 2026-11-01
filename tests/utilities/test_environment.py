@@ -7,7 +7,7 @@ import sys
 from typing import Any
 
 CONTAINER = "susa.communicators.container.ContainerCommunicator"
-MACHINE_MODEL = "susa.libvirt.machine_model.MachineModel"
+MACHINE_MODEL = "susa.libvirt.machine_model.LVMachineModel"
 
 
 def python(

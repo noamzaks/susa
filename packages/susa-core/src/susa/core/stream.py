@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import re
 import select
 from abc import ABC, abstractmethod
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -15,10 +16,16 @@ class OutputStream(ABC):
     @abstractmethod
     def read(self, size: int | None = None, timeout: float | None = 0) -> bytes: ...
 
-    def read_until(self, expected: bytes, timeout: float | None = None) -> bytes:
+    def read_until(
+        self, expected: bytes | re.Pattern[bytes], timeout: float | None = None
+    ) -> bytes:
         deadline = Deadline(timeout)
         result = b""
-        while expected not in result:
+        while not (
+            expected in result
+            if isinstance(expected, bytes)
+            else expected.search(result)
+        ):
             if deadline.passed():
                 raise TimeoutError(
                     f"{expected!r} didn't appear within {timeout} seconds (got {result!r})"
@@ -29,12 +36,12 @@ class OutputStream(ABC):
     def read_all(self, timeout: float | None = None) -> bytes:
         deadline = Deadline(timeout)
         result = b""
-        while not deadline.passed():
+        while True:
+            deadline.test("The stream didn't end")
             try:
                 result += self.read(timeout=deadline.remaining())
             except EOFError:
                 return result
-        raise TimeoutError(f"The stream didn't end within {timeout} seconds")
 
     # In a thread, so that what writes it doesn't wait for it to be read (e.g. while it's waited for).
     def read_all_in_background(self) -> Future[bytes]:

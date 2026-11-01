@@ -11,23 +11,23 @@ communicator keeps trying to connect while its machine boots:
 ```python
 from susa.communicators.ssh import SSHCommunicator
 from susa.libvirt import (
-    Connection,
+    URI,
     LVMachine,
     LVNetwork,
     LVVolume,
-    MachineModel,
-    NetworkModel,
-    VolumeModel,
+    LVMachineModel,
+    LVNetworkModel,
+    LVVolumeModel,
 )
 from susa.utilities.generic import GIGA
 from susa.utilities.networking import SubnetReservation
 
-with Connection("qemu:///system"), SubnetReservation() as subnet:
+with URI.set("qemu:///system"), SubnetReservation() as subnet:
     # A network on a free subnet, and a volume keeping the machine's changes off the image.
-    network_model = NetworkModel().default().ip(subnet.ip)
-    volume_model = VolumeModel().backing("/machines/debian_x86_64.qcow2")
+    network_model = LVNetworkModel().default().ip(subnet.ip)
+    volume_model = LVVolumeModel().backing("/machines/debian_x86_64.qcow2")
     machine_model = (
-        MachineModel()
+        LVMachineModel()
         .arch("x86_64")
         .efi()
         .default()
@@ -57,9 +57,9 @@ can point at.
   "$schema": "recipe.schema.json",
   "objects": [
     {"subnet": {"susa.utilities.networking.SubnetReservation": {}}},
-    {"network_model": {"susa.libvirt.network_model.NetworkModel": ["default", {"ip": {"$ref": "subnet.ip"}}]}},
-    {"volume_model": {"susa.libvirt.volume_model.VolumeModel": [{"backing": "/machines/debian_x86_64.qcow2"}]}},
-    {"machine_model": {"susa.libvirt.machine_model.MachineModel": [
+    {"network_model": {"susa.libvirt.network_model.LVNetworkModel": ["default", {"ip": {"$ref": "subnet.ip"}}]}},
+    {"volume_model": {"susa.libvirt.volume_model.LVVolumeModel": [{"backing": "/machines/debian_x86_64.qcow2"}]}},
+    {"machine_model": {"susa.libvirt.machine_model.LVMachineModel": [
       {"arch": "x86_64"}, "efi", "default", {"memory": 2147483648},
       {"volume": {"$ref": "volume_model"}}, {"network": {"$ref": "network_model"}}
     ]}},
@@ -78,11 +78,11 @@ make is created.
 from pathlib import Path
 
 from susa.communicators.ssh import SSHCommunicator
-from susa.libvirt import Connection
+from susa.libvirt import URI
 from susa.recipes.session import Session
 
 debian = Session.model_validate_json(Path("debian.json").read_text())
-with Connection("qemu:///system"), debian:
+with URI.set("qemu:///system"), debian:
     print(debian.get("ssh", SSHCommunicator).check("uname -a"))
 ```
 
@@ -92,17 +92,66 @@ Commands that run on the host (e.g. the ssh, telnet and rlogin clients, `ping`, 
 reservations' `ip route`) run through `susa.core.communicator.HOST`, a `Variable` holding an `AsyncCommandRunner`.
 Objects take its value when they're made, and `with HOST.set(...):` changes it for a block.
 
+Consoles run on a terminal from `script` (`util-linux-script` on Fedora).
+
 `susa.podman.container.LibvirtContainer` runs libvirt in a rootless podman container (of the `susa-libvirt` image, built
-the first time). Until it's destroyed, connections default to it, and the host is a
+the first time). Until it's destroyed, virsh defaults to it, and the host is a
 `susa.communicators.container.ContainerCommunicator`, which runs commands (with this system's programs) in the
 container's user and network namespaces, where they reach its machines. It also sets `LIBVIRT_DEFAULT_URI`,
 `SUSA_SUBNETS_LOCK` and `SUSA_SESSION` (a session recipe whose `host` is the host), so processes started meanwhile (e.g.
 other Python programs using SUSA, with `susa-recipes`) default to it too:
 
 ```python
-from susa.libvirt import Connection
+from susa.libvirt import URI
 from susa.podman.container import LibvirtContainer
 
-with LibvirtContainer(mounts=["/machines"]), Connection():
+with LibvirtContainer(mounts=["/machines"]):
     ...  # As above.
+```
+
+`susa.kubevirt` runs machines on a single-node Kubernetes cluster (bridges are per node) with KubeVirt, using the current
+kubeconfig. It needs KubeVirt, CDI
+(for volumes), Multus (for networks), `kubectl` and `virtctl`, and for snapshots a CSI driver that supports them and KubeVirt's `Snapshot` feature
+gate. A storage class needs a CDI StorageProfile with its access and volume modes. Machines are on bridges: `KVMachineModel.network(network, ip)` gives the guest that IP over DHCP, and
+`KVNetworkModel.ip` is the node's address there, through which it reaches them. Bridged traffic goes through the node's
+firewall, so with firewalld, trust SUSA's bridges once (`sudo firewall-cmd --permanent --zone=trusted
+--add-interface=susa+` and `--reload`), which covers the default names of networks. Snapshots are of the disks: KubeVirt
+doesn't save memory, so reverting boots the machine again.
+
+Machines of other architectures than the node's need a virt-launcher image with their QEMU, which
+`scripts/kubevirt-launcher/setup.sh` builds and installs on a single-node Arm64 cluster (it enables an alpha feature gate
+and replaces the image KubeVirt uses, and the local registry it makes loses the image when its pod goes away).
+`KVMachineModel.cross_architecture("amd64")` is KubeVirt's own way, for x86_64 on Arm64, without video.
+`KVMachineModel.emulate(arch)` is for `i686`, `ppc64le`, `riscv64`, `armv7l` and `mips`. A kernel outside the disk comes from
+a container image (`KVMachineModel.kernel`). Guests run through software emulation, so they're slow.
+
+```python
+from susa.communicators.ssh import SSHCommunicator
+from susa.kubevirt import (
+    KVMachine,
+    KVMachineModel,
+    KVNetwork,
+    KVNetworkModel,
+    KVVolume,
+    KVVolumeModel,
+)
+from susa.utilities.generic import GIGA
+
+network_model = KVNetworkModel().ip("10.77.0.1")
+volume_model = KVVolumeModel().capacity(12 * GIGA).clone("debian")
+machine_model = (
+    KVMachineModel()
+    .memory(2 * GIGA)
+    .volume(volume_model)
+    .network(network_model, "10.77.0.5")
+)
+
+with (
+    KVNetwork(network_model) as network,
+    network.sniffer() as sniffer,
+    KVVolume(volume_model),
+    KVMachine(machine_model) as machine,
+    SSHCommunicator(machine.ip, "root", "a") as ssh,
+):
+    print(ssh.check("uname -a"))
 ```

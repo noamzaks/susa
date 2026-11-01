@@ -12,19 +12,19 @@ from susa.communicators.login import Login
 from susa.communicators.serial import SerialCommunicator
 from susa.core.machine import Serial, SerialAccessible
 from susa.libvirt import (
-    DiskModel,
-    InterfaceModel,
-    MachineModel,
-    NetworkModel,
+    LVDiskModel,
+    LVInterfaceModel,
+    LVMachineModel,
+    LVNetworkModel,
 )
 from susa.recipes import CLASSES, Recipe
 from susa.utilities.generic import GIGA
 
-MACHINE = "susa.libvirt.machine_model.MachineModel"
-NETWORK = "susa.libvirt.network_model.NetworkModel"
-DISK = "susa.libvirt.disk_model.DiskModel"
-INTERFACE = "susa.libvirt.interface_model.InterfaceModel"
-VOLUME = "susa.libvirt.volume_model.VolumeModel"
+MACHINE = "susa.libvirt.machine_model.LVMachineModel"
+NETWORK = "susa.libvirt.network_model.LVNetworkModel"
+DISK = "susa.libvirt.disk_model.LVDiskModel"
+INTERFACE = "susa.libvirt.interface_model.LVInterfaceModel"
+VOLUME = "susa.libvirt.volume_model.LVVolumeModel"
 MAC = "52:54:00:12:34:56"
 SSH = "susa.communicators.ssh.SSHCommunicator"
 SERIAL = "susa.communicators.serial.SerialCommunicator"
@@ -36,7 +36,7 @@ def make_recipe(recipe: dict[str, Any]) -> Any:
 
 def test_make_builder_steps() -> None:
     recipe = {MACHINE: [{"name": "test"}, {"arch": "mips"}, "default"]}
-    assert make_recipe(recipe) == MachineModel("test").arch("mips").default()
+    assert make_recipe(recipe) == LVMachineModel("test").arch("mips").default()
 
 
 def test_make_models() -> None:
@@ -59,15 +59,15 @@ def test_make_models() -> None:
         }
     )
     expected = (
-        MachineModel("test")
+        LVMachineModel("test")
         .arch("x86_64")
         .default()
         .memory(4 * GIGA)
         .cpu(2)
         .efi(secure_boot=True)
         .kernel("vmlinux", cmdline="console=ttyS0")
-        .disk(DiskModel().source("somewhere"))
-        .interface(InterfaceModel(mac=MAC).network("test"))
+        .disk(LVDiskModel().source("somewhere"))
+        .interface(LVInterfaceModel(mac=MAC).network("test"))
         .qemu_args(["-cpu", "max"])
     )
     assert machine == expected
@@ -89,10 +89,10 @@ def test_make_models() -> None:
         }
     )
     expected_network = (
-        NetworkModel("test")
+        LVNetworkModel("test")
         .default()
         .ip("10.0.0.1", "255.255.0.0")
-        .interface(InterfaceModel(mac=MAC), "10.0.0.10")
+        .interface(LVInterfaceModel(mac=MAC), "10.0.0.10")
         .nat()
     )
     assert network == expected_network
@@ -151,7 +151,7 @@ def test_make_file(tmp_path: Path) -> None:
     path = tmp_path / "machine.json"
     path.write_text(json.dumps({MACHINE: [{"name": "test"}, {"arch": "mips"}]}))
     recipe = Recipe.model_validate_json(path.read_text())
-    assert recipe.make() == MachineModel("test").arch("mips")
+    assert recipe.make() == LVMachineModel("test").arch("mips")
 
 
 def test_schema() -> None:

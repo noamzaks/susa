@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import re
+import tempfile
 import time
 from collections.abc import Sequence
+from pathlib import Path
 
 from typing_extensions import override
 
-import libvirt as lv
 from susa.core.interface import BasicInterface, Interface
 from susa.core.keyboard import Key, KeyPressable
 from susa.core.machine import (
+    CommandSerial,
     Machine,
     Powerable,
     Screenshot,
@@ -17,47 +20,38 @@ from susa.core.machine import (
     Snapshot,
     Snapshottable,
 )
+from susa.libvirt._virsh import virsh, virsh_command, virsh_xml
 from susa.libvirt.entity import LVEntity
-from susa.libvirt.interface_model import InterfaceModel
-from susa.libvirt.machine_model import MachineModel, SnapshotModel
-from susa.libvirt.network_model import NetworkModel
-from susa.libvirt.serial import LVSerial
-from susa.libvirt.stream import LVStream
+from susa.libvirt.interface_model import LVInterfaceModel
+from susa.libvirt.machine_model import LVMachineModel, LVSnapshotModel
+from susa.libvirt.network_model import LVNetworkModel
 
 
-class LVSnapshot(LVEntity[lv.virDomainSnapshot, SnapshotModel], Snapshot):
+class LVSnapshot(LVEntity[LVSnapshotModel], Snapshot):
     def __init__(
         self,
         machine: LVMachine,
-        model: SnapshotModel | None = None,
+        model: LVSnapshotModel | None = None,
     ) -> None:
-        super().__init__(model or SnapshotModel())
+        super().__init__(model or LVSnapshotModel())
         self.machine = machine
 
     @override
     def create(self) -> None:
-        assert self.value is None
-        self.value = self.machine.domain.snapshotCreateXML(self.xml())
+        virsh_xml(self._xml(), "snapshot-create", self.machine.name, "--xmlfile")
 
     @override
     def destroy(self) -> None:
-        assert self.value is not None
         self.revert()
-        self.value.delete()
-        self.value = None
-
-    @override
-    def lookup(self) -> lv.virDomainSnapshot:
-        return self.machine.domain.snapshotLookupByName(self.model.get_name())
+        virsh("snapshot-delete", self.machine.name, self.model.get_name())
 
     @override
     def revert(self) -> None:
-        assert self.value is not None
-        self.machine.domain.revertToSnapshot(self.value)
+        virsh("snapshot-revert", self.machine.name, self.model.get_name())
 
 
 class LVMachine(
-    LVEntity[lv.virDomain, MachineModel],
+    LVEntity[LVMachineModel],
     Machine,
     Snapshottable,
     Powerable,
@@ -65,13 +59,8 @@ class LVMachine(
     SerialAccessible,
     KeyPressable,
 ):
-    def __init__(self, model: MachineModel) -> None:
+    def __init__(self, model: LVMachineModel) -> None:
         super().__init__(model)
-
-    @property
-    def domain(self) -> lv.virDomain:
-        assert self.value is not None, "The machine wasn't created!"
-        return self.value
 
     @property
     @override
@@ -82,33 +71,24 @@ class LVMachine(
     @override
     def interfaces(self) -> list[Interface]:
         return [
-            BasicInterface(i.get_mac(), self.reserved_ip(i))
+            BasicInterface(i.get_mac(), self._reserved_ip(i))
             for i in self.model.get_interfaces()
         ]
 
     @override
     def create(self) -> None:
-        assert self.value is None
-        self.value = self.conn.defineXML(self.xml())
-        self.value.create()
+        virsh_xml(self._xml(), "define")
+        virsh("start", self.name)
 
     @override
     def destroy(self) -> None:
         if self.is_powered_on:
             self.power_off()
 
-        flags = (
-            lv.VIR_DOMAIN_UNDEFINE_MANAGED_SAVE
-            | lv.VIR_DOMAIN_UNDEFINE_SNAPSHOTS_METADATA
-        )
+        flags = ["--managed-save", "--snapshots-metadata"]
         if self.model.get_firmware() == "efi":
-            flags |= lv.VIR_DOMAIN_UNDEFINE_NVRAM
-        self.domain.undefineFlags(flags)
-        self.value = None
-
-    @override
-    def lookup(self) -> lv.virDomain:
-        return self.conn.lookupByName(self.name)
+            flags.append("--nvram")
+        virsh("undefine", self.name, *flags)
 
     @override
     def snapshot(self) -> LVSnapshot:
@@ -117,57 +97,52 @@ class LVMachine(
     @property
     @override
     def is_powered_on(self) -> bool:
-        return bool(self.domain.isActive())
+        return self.name in virsh("list", "--name").split()
 
     @override
     def power_on(self) -> None:
-        self.domain.create()
+        virsh("start", self.name)
 
     @override
     def power_off(self) -> None:
-        self.domain.destroy()
+        virsh("destroy", self.name)
 
     @override
     def shutdown(self) -> None:
-        self.domain.shutdown()
+        virsh("shutdown", self.name)
 
     @override
     def reboot(self) -> None:
-        self.domain.reboot()
+        virsh("reboot", self.name)
 
     @override
     def reset(self) -> None:
-        self.domain.reset()
+        virsh("reset", self.name)
 
     @override
     def screenshot(self) -> Screenshot:
-        stream = LVStream(self.conn)
-        mime_type = self.domain.screenshot(stream.stream, 0)
-        data = stream.read_all()
-        stream.close()
-        return Screenshot(data, mime_type)
+        with tempfile.NamedTemporaryFile() as file:
+            output = virsh("screenshot", self.name, "--file", file.name)
+            match = re.search(r"type of (\S+)", output)
+            assert match is not None, output
+            return Screenshot(Path(file.name).read_bytes(), match[1])
 
     @override
-    def serial(self) -> LVSerial:
-        return LVSerial(self)
+    def serial(self) -> CommandSerial:
+        return CommandSerial(virsh_command("console", self.name))
 
     @override
     def press(self, keys: Sequence[Key], hold_time: float = 0.1) -> None:
-        key_codes = [key.value for key in keys]
-        self.domain.sendKey(
-            lv.VIR_KEYCODE_SET_LINUX,
-            round(hold_time * 1000),
-            key_codes,
-            len(key_codes),
-            0,
-        )
+        hold = str(round(hold_time * 1000))
+        codes = [str(key.value) for key in keys]
+        virsh("send-key", self.name, "--codeset", "linux", "--holdtime", hold, *codes)
         # libvirt returns before they're released, and the next keys would queue up behind them.
         time.sleep(hold_time)
 
-    def reserved_ip(self, interface: InterfaceModel) -> str | None:
+    def _reserved_ip(self, interface: LVInterfaceModel) -> str | None:
         network = interface.get_network()
         if network is None:
             return None
 
-        xml = self.conn.networkLookupByName(network).XMLDesc()
-        return NetworkModel.parse(xml).get_hosts().get(interface.get_mac())
+        xml = virsh("net-dumpxml", network)
+        return LVNetworkModel.parse(xml).get_hosts().get(interface.get_mac())

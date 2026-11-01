@@ -1,0 +1,18 @@
+# QEMU and its libraries stay apart under /opt/qemu, since they're newer than the launcher's, and only the firmware is
+# where libvirt's descriptors say it is.
+FROM registry.fedoraproject.org/fedora:44 AS qemu
+RUN dnf -y install --installroot=/out --use-host-config --setopt=install_weak_deps=False --nodocs \
+      qemu-system-x86-core qemu-system-ppc-core qemu-system-riscv-core qemu-system-mips-core qemu-system-arm-core \
+      qemu-device-display-virtio-gpu qemu-device-display-virtio-gpu-pci qemu-device-display-virtio-vga \
+    && mkdir -p /image/opt/qemu /image/usr/bin /image/usr/share/qemu/firmware \
+    && cp -a /out/usr /image/opt/qemu/ \
+    && cp -a /out/usr/share/edk2 /image/usr/share/ \
+    && ln -s edk2/ovmf /image/usr/share/OVMF \
+    && cp -a /out/usr/share/qemu/firmware/*ovmf* /out/usr/share/qemu/firmware/*riscv* /image/usr/share/qemu/firmware/ \
+    && for e in x86_64 i386 ppc64 riscv64 mips mipsel arm; do \
+         printf '#!/bin/sh\nQEMU_MODULE_DIR=/opt/qemu/usr/lib64/qemu exec /opt/qemu/usr/lib/ld-linux-aarch64.so.1 --library-path /opt/qemu/usr/lib64:/opt/qemu/usr/lib /opt/qemu/usr/bin/qemu-system-%s -L /opt/qemu/usr/share/qemu "$@"\n' $e > /image/usr/bin/qemu-system-$e \
+         && chmod 755 /image/usr/bin/qemu-system-$e; \
+       done
+
+FROM quay.io/kubevirt/virt-launcher:v1.9.1
+COPY --from=qemu /image/ /

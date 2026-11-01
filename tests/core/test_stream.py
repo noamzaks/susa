@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 
 import pytest
@@ -20,6 +21,13 @@ class FakeStream(OutputStream):
 def test_read_until() -> None:
     stream = FakeStream(b"booting\r\n", b"susa lo", b"gin: ", b"after")
     assert stream.read_until(b"login:", timeout=1) == b"booting\r\nsusa login: "
+    assert stream.read() == b"after"
+
+
+def test_read_until_pattern() -> None:
+    stream = FakeStream(b"booting\r\n", b"exit", b"-3\n", b"after")
+    pattern = re.compile(rb"exit-(\d)")
+    assert stream.read_until(pattern, timeout=1) == b"booting\r\nexit-3\n"
     assert stream.read() == b"after"
 
 

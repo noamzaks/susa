@@ -6,6 +6,7 @@ import os
 import random
 import shutil
 import subprocess
+import time
 from collections.abc import Generator, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,27 +20,27 @@ from susa.communicators.unix import UnixCommunicator
 from susa.core.communicator import FileTransferrer
 from susa.core.machine import wait_until_booted
 from susa.libvirt import (
-    Connection,
     LVMachine,
     LVNetwork,
     LVSnapshot,
     LVVolume,
-    VolumeModel,
+    LVVolumeModel,
 )
+from susa.libvirt._virsh import URI, virsh
 from susa.recipes import Recipe
 from susa.recipes.session import Session
 from susa.utilities.generic import GIGA, wait_until
 from susa.utilities.networking import ping, pings
 
 MACHINES = Path("/machines")
-MACHINE_MODEL = "susa.libvirt.machine_model.MachineModel"
-NETWORK_MODEL = "susa.libvirt.network_model.NetworkModel"
-VOLUME_MODEL = "susa.libvirt.volume_model.VolumeModel"
+MACHINE_MODEL = "susa.libvirt.machine_model.LVMachineModel"
+NETWORK_MODEL = "susa.libvirt.network_model.LVNetworkModel"
+VOLUME_MODEL = "susa.libvirt.volume_model.LVVolumeModel"
 SUBNET = "susa.utilities.networking.SubnetReservation"
 LV_NETWORK = "susa.libvirt.network.LVNetwork"
 LV_VOLUME = "susa.libvirt.volume.LVVolume"
 LV_MACHINE = "susa.libvirt.machine.LVMachine"
-BOOT_TIMEOUT = 120
+BOOT_TIMEOUT = 300
 QUIET_TIME = 5
 
 
@@ -163,8 +164,8 @@ def boot(machine: LVMachine) -> None:
 
 
 @pytest.fixture(scope="session")
-def connection() -> Iterator[None]:
-    with Connection("qemu:///system"):
+def uri() -> Iterator[None]:
+    with URI.set("qemu:///system"):
         yield
 
 
@@ -179,7 +180,7 @@ def name(request: pytest.FixtureRequest) -> str:
 
 
 @pytest.fixture(scope="module")
-def session(name: str, connection: None) -> Iterator[Session]:
+def session(name: str, uri: None) -> Iterator[Session]:
     image = IMAGES[name]
     if not image.path.exists():
         pytest.skip(f"{image.path} doesn't exist")
@@ -339,8 +340,11 @@ def test_power_cycle(machine: LVMachine, kind: str) -> None:
 
 def test_sniff(machine: LVMachine, network: LVNetwork) -> None:
     with network.sniffer() as sniffer:
+        # Opening it waits for the header, which tcpdump writes once it's capturing.
+        _ = sniffer.pcap
         logging.info("Pinging the machine while sniffing its network")
         pings(machine.ip, 3, timeout=5, interval=1)
+        time.sleep(1)
     requests = [
         p
         for p in sniffer.packets()
@@ -384,20 +388,21 @@ def qemu(*args: str | Path) -> None:
 
 
 # Committing into the image backing a volume, which here is a small one of its own (others would see the change).
-def test_commit_into_backing(connection: None, tmp_path: Path) -> None:
+def test_commit_into_backing(uri: None, tmp_path: Path) -> None:
     image = tmp_path / "image.qcow2"
     qemu("qemu-img", "create", "-f", "qcow2", image, "1M")
-    with LVVolume(VolumeModel().backing(image)) as volume:
+    with LVVolume(LVVolumeModel().backing(image)) as volume:
         # What a machine would have written to it.
         written = tmp_path / "written.qcow2"
         qemu("qemu-img", "create", "-f", "qcow2", "-b", image, "-F", "qcow2", written)
         qemu("qemu-io", "-c", "write -P 0xab 0 4k", written)
-        assert volume.value is not None
-        stream = volume.conn.newStream()
-        volume.value.upload(stream, 0, 0)
-        with written.open("rb") as file:
-            stream.sendAll(lambda _, size, file: file.read(size), file)
-        stream.finish()
+        virsh(
+            "vol-upload",
+            "--pool",
+            volume.model.get_pool(),
+            volume.model.get_name(),
+            str(written),
+        )
 
         volume.commit()
     qemu("qemu-io", "-c", "read -P 0xab 0 4k", image)

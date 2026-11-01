@@ -14,12 +14,12 @@ from typing_extensions import override
 from susa.communicators.container import ContainerCommunicator
 from susa.core.communicator import HOST
 from susa.core.resource import Resource
-from susa.libvirt.connection import Connection
+from susa.libvirt._virsh import URI
 from susa.utilities.generic import random_id, wait_until
 from susa.utilities.networking import SubnetReservation
 
 
-# libvirt in a rootless container (of the image, built if it's missing). Until it's destroyed, connections default to it,
+# libvirt in a rootless container (of the image, built if it's missing). Until it's destroyed, virsh defaults to it,
 # and commands that run on the host (e.g. ssh's) run in its network, where they reach its machines. So do those of
 # processes started meanwhile, through the environment.
 class LibvirtContainer(Resource):
@@ -64,7 +64,7 @@ class LibvirtContainer(Resource):
         uri = f"qemu+unix:///system?socket={socket}"
         lock = self.directory / "subnets.lock"
         self.defaults.enter_context(HOST.set(ContainerCommunicator(pid)))
-        self.defaults.enter_context(Connection.URI.set(uri))
+        self.defaults.enter_context(URI.set(uri))
         self.defaults.enter_context(SubnetReservation.LOCK.set(lock))
         cls = ContainerCommunicator
         host = {f"{cls.__module__}.{cls.__qualname__}": {"pid": pid}}

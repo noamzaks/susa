@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 import random
+import shlex
 import string
+import subprocess
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 
 GIGA = 1 << 30
 
@@ -23,6 +26,10 @@ class Deadline:
     def passed(self) -> bool:
         return self.remaining() == 0
 
+    def test(self, message: str) -> None:
+        if self.passed():
+            raise TimeoutError(f"{message} within {self.timeout} seconds")
+
 
 def wait_until(
     test: Callable[[], bool],
@@ -30,8 +37,28 @@ def wait_until(
     interval: float = 0.1,
 ) -> None:
     deadline = Deadline(timeout)
-    while not deadline.passed():
+    while True:
+        deadline.test("The condition didn't hold")
         if test():
             return
         time.sleep(interval)
-    raise TimeoutError(f"Timed out after {timeout} seconds")
+
+
+def run(
+    command: Sequence[str],
+    stdin: str | None = None,
+    environment: Mapping[str, str] | None = None,
+) -> str:
+    logging.info(shlex.join(command))
+    result = subprocess.run(
+        command,
+        input=stdin,
+        capture_output=True,
+        text=True,
+        env=environment,
+        check=False,
+    )
+    if result.returncode:
+        logging.error(result.stderr)
+    result.check_returncode()
+    return result.stdout

@@ -6,40 +6,42 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import ClassVar
 
-from typing_extensions import Self
+from typing_extensions import Self, override
 
 from susa.libvirt.arch import ARCH_DEFAULTS, ArchDefaults, have_kvm
-from susa.libvirt.disk_model import DiskModel
-from susa.libvirt.interface_model import InterfaceModel
-from susa.libvirt.model import Model, add, attribute, child, node, put
-from susa.libvirt.network_model import NetworkModel
-from susa.libvirt.volume_model import VolumeModel
+from susa.libvirt.disk_model import LVDiskModel
+from susa.libvirt.interface_model import LVInterfaceModel
+from susa.libvirt.model import LVModel, add, attribute, child, node, put
+from susa.libvirt.network_model import LVNetworkModel
+from susa.libvirt.volume_model import LVVolumeModel
 from susa.utilities.generic import random_id
 
-QEMU = "http://libvirt.org/schemas/domain/qemu/1.0"
-ET.register_namespace("qemu", QEMU)
 
-
-class MachineModel(Model):
+class LVMachineModel(LVModel):
+    QEMU_NAMESPACE = "http://libvirt.org/schemas/domain/qemu/1.0"
     # The device names libvirt gives disks on each bus ("sd" for any other).
     BUS_PREFIXES: ClassVar[dict[str, str]] = {"ide": "hd", "fdc": "fd", "virtio": "vd"}
 
     def __init__(self, name: str | None = None) -> None:
         self.element = node(
             "domain",
-            None,
-            node("name", name or f"susa-{random_id(10)}"),
-            node("devices"),
-            type="qemu",
+            elements=[
+                node("name", text=name or f"susa-{random_id(10)}"),
+                node("devices"),
+            ],
+            attrs={"type": "qemu"},
         )
 
     def name(self, name: str) -> Self:
-        put(self.element, node("name", name))
+        put(self.element, node("name", text=name))
 
         return self
 
     def arch(self, arch: str) -> Self:
-        put(self.element, node("os", None, node("type", "hvm", arch=arch)))
+        put(
+            self.element,
+            node("os", elements=[node("type", attrs={"arch": arch}, text="hvm")]),
+        )
 
         return self
 
@@ -49,12 +51,12 @@ class MachineModel(Model):
         return self
 
     def memory(self, memory: int) -> Self:
-        put(self.element, node("memory", str(memory), unit="B"))
+        put(self.element, node("memory", attrs={"unit": "B"}, text=str(memory)))
 
         return self
 
     def cpu(self, cpu: int) -> Self:
-        put(self.element, node("vcpu", str(cpu)))
+        put(self.element, node("vcpu", text=str(cpu)))
 
         return self
 
@@ -63,7 +65,7 @@ class MachineModel(Model):
         if acpi:
             add(features, node("acpi"))
         if gic:
-            add(features, node("gic", version="3"))
+            add(features, node("gic", attrs={"version": "3"}))
         put(self.element, features)
 
         return self
@@ -73,8 +75,8 @@ class MachineModel(Model):
         os = child(self.element, "os")
         attribute(os, "firmware", "efi")
         enabled = "yes" if secure_boot else "no"
-        feature = node("feature", enabled=enabled, name="secure-boot")
-        put(os, node("firmware", None, feature))
+        feature = node("feature", attrs={"enabled": enabled, "name": "secure-boot"})
+        put(os, node("firmware", elements=[feature]))
 
         return self
 
@@ -85,86 +87,92 @@ class MachineModel(Model):
         cmdline: str | None = None,
     ) -> Self:
         os = child(self.element, "os")
-        put(os, node("kernel", str(Path(kernel).resolve())))
+        put(os, node("kernel", text=str(Path(kernel).resolve())))
         if initrd is not None:
-            put(os, node("initrd", str(Path(initrd).resolve())))
+            put(os, node("initrd", text=str(Path(initrd).resolve())))
         if cmdline is not None:
-            put(os, node("cmdline", cmdline))
+            put(os, node("cmdline", text=cmdline))
 
         return self
 
     def qemu_args(self, args: Sequence[str]) -> Self:
-        tag = f"{{{QEMU}}}commandline"
-        commandline = self.element.find(tag)
+        commandline = next(
+            (other for other in self.element if other.tag == "qemu:commandline"), None
+        )
         if commandline is None:
-            commandline = node(tag)
+            commandline = node("qemu:commandline")
             add(self.element, commandline)
+            attribute(self.element, "xmlns:qemu", LVMachineModel.QEMU_NAMESPACE)
         for a in args:
-            add(commandline, node(f"{{{QEMU}}}arg", value=a))
+            add(commandline, node("qemu:arg", attrs={"value": a}))
 
         return self
 
     def video(self, model: str) -> Self:
-        add(self.get_devices(), node("video", None, node("model", type=model)))
+        add(
+            self._devices,
+            node("video", elements=[node("model", attrs={"type": model})]),
+        )
 
         return self
 
     def vnc(self) -> Self:
-        add(self.get_devices(), node("graphics", type="vnc", port="-1"))
+        add(self._devices, node("graphics", attrs={"type": "vnc", "port": "-1"}))
 
         return self
 
     def tablet(self) -> Self:
-        add(self.get_devices(), node("input", type="tablet", bus="usb"))
+        add(self._devices, node("input", attrs={"type": "tablet", "bus": "usb"}))
 
         return self
 
     def keyboard(self) -> Self:
-        add(self.get_devices(), node("input", type="keyboard", bus="usb"))
+        add(self._devices, node("input", attrs={"type": "keyboard", "bus": "usb"}))
 
         return self
 
     def usb(self) -> Self:
-        usb = node("controller", index="0", type="usb")
-        address = self.next_pci_address()
+        usb = node("controller", attrs={"index": "0", "type": "usb"})
+        address = self._next_pci_address()
         if address is not None:
             add(usb, address)
-        add(self.get_devices(), usb)
+        add(self._devices, usb)
 
         return self
 
     def console(self) -> Self:
-        add(self.get_devices(), node("console", type="pty"))
+        add(self._devices, node("console", attrs={"type": "pty"}))
 
         return self
 
-    def disk(self, disk: DiskModel) -> Self:
-        bus = child(disk.element, "target").get("bus") or self.get_defaults().disk_bus
-        target = node("target", dev=self.next_disk_name(bus))
-        if bus is not None:
-            attribute(target, "bus", bus)
+    def disk(self, disk: LVDiskModel) -> Self:
         element = copy.deepcopy(disk.element)
-        put(element, target)
-        add(self.get_devices(), element)
+        target = element.find("target")
+        bus = self._defaults.disk_bus if target is None else target.attrib["bus"]
+        put(
+            element,
+            node("target", attrs={"bus": bus, "dev": self._next_disk_name(bus)}),
+        )
+        add(self._devices, element)
 
         return self
 
-    def interface(self, interface: InterfaceModel) -> Self:
+    def interface(self, interface: LVInterfaceModel) -> Self:
         if interface.element.find("model") is None:
-            interface.model(self.get_defaults().nic)
+            interface.model(self._defaults.nic)
         if interface.element.find("address") is None:
-            address = self.next_pci_address()
+            address = self._next_pci_address()
             if address is not None:
                 add(interface.element, address)
-        add(self.get_devices(), interface.element)
+        add(self._devices, interface.element)
 
         return self
 
-    def volume(self, volume: VolumeModel) -> Self:
-        return self.disk(DiskModel().volume(volume))
+    def volume(self, volume: LVVolumeModel) -> Self:
+        return self.disk(LVDiskModel().volume(volume))
 
-    def network(self, network: NetworkModel, ip: str | None = None) -> Self:
-        interface = InterfaceModel()
+    def network(self, network: LVNetworkModel, ip: str | None = None) -> Self:
+        interface = LVInterfaceModel()
         network.interface(interface, ip)
         return self.interface(interface)
 
@@ -175,49 +183,54 @@ class MachineModel(Model):
 
     def default_cpu(self) -> Self:
         if self.element.get("type") == "kvm":
-            put(self.element, node("cpu", mode="host-passthrough"))
-        elif (mode := self.get_defaults().tcg_cpu) is not None:
-            put(self.element, node("cpu", mode=mode))
+            put(self.element, node("cpu", attrs={"mode": "host-passthrough"}))
+        elif (mode := self._defaults.tcg_cpu) is not None:
+            put(self.element, node("cpu", attrs={"mode": mode}))
+
+        return self
+
+    def default_machine(self) -> Self:
+        return self.machine(self._defaults.machine)
+
+    def default_features(self) -> Self:
+        defaults = self._defaults
+        return self.features(acpi=defaults.acpi, gic=defaults.gic)
+
+    def default_video(self) -> Self:
+        return self.video(self._defaults.video)
+
+    def default_qemu_args(self) -> Self:
+        if args := self._defaults.qemu_args:
+            self.qemu_args(args)
 
         return self
 
     def default(self) -> Self:
-        defaults = self.get_defaults()
-
-        self.default_type().machine(defaults.machine).default_cpu()
-        self.features(acpi=defaults.acpi, gic=defaults.gic)
-        self.video(defaults.video).vnc().tablet().keyboard().usb().console()
-        if defaults.qemu_args:
-            self.qemu_args(defaults.qemu_args)
-
-        return self
-
-    def next_disk_name(self, bus: str | None) -> str:
-        prefix = MachineModel.BUS_PREFIXES.get(bus, "sd") if bus is not None else "sd"
-        suffix = ""
-        index = len(self.get_devices().findall("disk")) + 1
-        while index > 0:
-            index, remainder = divmod(index - 1, 26)
-            suffix = chr(ord("a") + remainder) + suffix
-        return prefix + suffix
-
-    def next_pci_address(self) -> ET.Element | None:
-        slots = self.get_defaults().pci_slots
-        if slots is None:
-            return None
-
-        devices = self.get_devices()
-        addresses = [*devices.findall("interface/address")]
-        addresses += devices.findall("controller/address")
-        # libvirt writes them in hexadecimal.
-        used = {int(a.attrib["slot"], 0) for a in addresses if "slot" in a.attrib}
-        free = [slot for slot in slots if slot not in used]
-        if not free:
-            raise RuntimeError(f"There's no free PCI slot left (of {slots})")
-
-        return node(
-            "address", type="pci", domain="0", bus="0", slot=str(free[0]), function="0"
+        return (
+            self.default_type()
+            .default_machine()
+            .default_cpu()
+            .default_features()
+            .default_video()
+            .vnc()
+            .tablet()
+            .keyboard()
+            .usb()
+            .console()
+            .default_qemu_args()
         )
+
+    # ElementTree resolves the prefix when parsing, and would make up another when serializing.
+    @classmethod
+    @override
+    def parse(cls, xml: str | bytes) -> Self:
+        model = super().parse(xml)
+        namespace = f"{{{LVMachineModel.QEMU_NAMESPACE}}}"
+        for element in model.element.iter():
+            if element.tag.startswith(namespace):
+                element.tag = element.tag.replace(namespace, "qemu:")
+                attribute(model.element, "xmlns:qemu", LVMachineModel.QEMU_NAMESPACE)
+        return model
 
     def get_name(self) -> str:
         name = child(self.element, "name").text
@@ -227,27 +240,64 @@ class MachineModel(Model):
     def get_arch(self) -> str:
         return child(self.element, "os/type").attrib["arch"]
 
-    def get_defaults(self) -> ArchDefaults:
-        return ARCH_DEFAULTS[self.get_arch()]
-
     def get_firmware(self) -> str | None:
         return child(self.element, "os").get("firmware")
 
-    def get_devices(self) -> ET.Element:
+    def get_interfaces(self) -> list[LVInterfaceModel]:
+        return [LVInterfaceModel.of(i) for i in self._devices.findall("interface")]
+
+    @property
+    def _defaults(self) -> ArchDefaults:
+        return ARCH_DEFAULTS[self.get_arch()]
+
+    @property
+    def _devices(self) -> ET.Element:
         return child(self.element, "devices")
 
-    def get_interfaces(self) -> list[InterfaceModel]:
-        return [InterfaceModel.of(i) for i in self.get_devices().findall("interface")]
+    def _next_disk_name(self, bus: str) -> str:
+        prefix = LVMachineModel.BUS_PREFIXES.get(bus, "sd")
+        suffix = ""
+        index = len(self._devices.findall("disk")) + 1
+        while index > 0:
+            index, remainder = divmod(index - 1, 26)
+            suffix = chr(ord("a") + remainder) + suffix
+        return prefix + suffix
+
+    def _next_pci_address(self) -> ET.Element | None:
+        slots = self._defaults.pci_slots
+        if slots is None:
+            return None
+
+        devices = self._devices
+        addresses = [*devices.findall("interface/address")]
+        addresses += devices.findall("controller/address")
+        # libvirt writes them in hexadecimal.
+        used = {int(a.attrib["slot"], 0) for a in addresses if "slot" in a.attrib}
+        free = [slot for slot in slots if slot not in used]
+        if not free:
+            raise RuntimeError(f"There's no free PCI slot left (of {slots})")
+
+        return node(
+            "address",
+            attrs={
+                "type": "pci",
+                "domain": "0",
+                "bus": "0",
+                "slot": str(free[0]),
+                "function": "0",
+            },
+        )
 
 
-class SnapshotModel(Model):
+class LVSnapshotModel(LVModel):
     def __init__(self, name: str | None = None) -> None:
         self.element = node(
-            "domainsnapshot", None, node("name", name or f"susa-{random_id(10)}")
+            "domainsnapshot",
+            elements=[node("name", text=name or f"susa-{random_id(10)}")],
         )
 
     def name(self, name: str) -> Self:
-        put(self.element, node("name", name))
+        put(self.element, node("name", text=name))
 
         return self
 

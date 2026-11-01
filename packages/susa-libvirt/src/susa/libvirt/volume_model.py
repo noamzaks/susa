@@ -4,23 +4,24 @@ from pathlib import Path
 
 from typing_extensions import Self
 
-from susa.libvirt.model import Model, child, node, put
+from susa.libvirt.model import LVModel, child, node, put
 from susa.utilities.generic import random_id
 
 
-class VolumeModel(Model):
+class LVVolumeModel(LVModel):
     def __init__(self, name: str | None = None) -> None:
         self.element = node(
             "volume",
-            None,
-            node("name", name or f"susa-{random_id(10)}"),
-            node("target", None, node("format", type="qcow2")),
+            elements=[
+                node("name", text=name or f"susa-{random_id(10)}"),
+                node("target", elements=[node("format", attrs={"type": "qcow2"})]),
+            ],
         )
         # The volume's XML doesn't say which pool it's in.
         self.pool_name = "default"
 
     def name(self, name: str) -> Self:
-        put(self.element, node("name", name))
+        put(self.element, node("name", text=name))
 
         return self
 
@@ -30,7 +31,7 @@ class VolumeModel(Model):
         return self
 
     def capacity(self, capacity: int) -> Self:
-        put(self.element, node("capacity", str(capacity), unit="B"))
+        put(self.element, node("capacity", attrs={"unit": "B"}, text=str(capacity)))
 
         return self
 
@@ -39,9 +40,10 @@ class VolumeModel(Model):
             self.element,
             node(
                 "backingStore",
-                None,
-                node("path", str(Path(image).resolve())),
-                node("format", type="qcow2"),
+                elements=[
+                    node("path", text=str(Path(image).resolve())),
+                    node("format", attrs={"type": "qcow2"}),
+                ],
             ),
         )
 

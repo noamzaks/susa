@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import shlex
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -11,7 +12,7 @@ from typing import TYPE_CHECKING
 
 from typing_extensions import override
 
-from susa.core.communicator import AsyncCommandRunner
+from susa.core.communicator import HOST, AsyncCommandRunner, AsyncCommandStream
 from susa.core.interface import Interface
 from susa.core.resource import Resource
 from susa.core.stream import InputOutputStream, SavedOutputStream
@@ -128,6 +129,25 @@ class Screenshottable(ABC):
 
 
 class Serial(Resource, InputOutputStream): ...
+
+
+# Of a console client, which needs a terminal, so `script` gives it one.
+class CommandSerial(AsyncCommandStream, Serial):
+    def __init__(
+        self, command: Sequence[str], host: AsyncCommandRunner | None = None
+    ) -> None:
+        self.client = shlex.join(command)
+        self.host = host or HOST.get()
+
+    @override
+    def create(self) -> None:
+        self.command = self.host.start(
+            f"script -E never -qfec {shlex.quote(self.client)} /dev/null"
+        )
+
+    @override
+    def destroy(self) -> None:
+        self.close()
 
 
 class SerialAccessible(ABC):

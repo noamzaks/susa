@@ -6,9 +6,10 @@ requires-python = ">=3.10"
 dependencies = [
     "susa-core",
     "susa-communicators",
+    "susa-kubevirt",
     "susa-libvirt",
     "susa-podman",
-    "susa-recipes[communicators,libvirt,podman]",
+    "susa-recipes[communicators,kubevirt,libvirt,podman]",
 ]
 
 [tool.uv]
@@ -20,6 +21,7 @@ members = ["packages/*"]
 [tool.uv.sources]
 susa-core = { workspace = true }
 susa-communicators = { workspace = true }
+susa-kubevirt = { workspace = true }
 susa-libvirt = { workspace = true }
 susa-podman = { workspace = true }
 susa-recipes = { workspace = true }
@@ -29,7 +31,7 @@ pytest-greendots = { git = "https://github.com/noamzaks/greendots", subdirectory
 strict = true
 files = ["packages/*/src", "tests"]
 explicit_package_bases = true
-mypy_path = ["typings", "packages/susa-core/src", "packages/susa-communicators/src", "packages/susa-libvirt/src", "packages/susa-podman/src", "packages/susa-recipes/src"]
+mypy_path = ["typings", "packages/susa-core/src", "packages/susa-communicators/src", "packages/susa-kubevirt/src", "packages/susa-libvirt/src", "packages/susa-podman/src", "packages/susa-recipes/src"]
 enable_error_code = ["explicit-override"]
 # Abstract classes can be asked for (e.g. `cook(recipe, ShellCommunicator)`), as `isinstance` checks them.
 disable_error_code = ["type-abstract"]
@@ -38,7 +40,7 @@ follow_untyped_imports = true
 [tool.pyright]
 include = ["packages", "tests"]
 typeCheckingMode = "strict"
-# libvirt and pytest-snapshot have none.
+# pytest-snapshot has none.
 reportMissingTypeStubs = false
 
 [tool.pytest.ini_options]
@@ -46,6 +48,10 @@ addopts = ["--dist", "loadgroup"]
 
 [tool.ruff.lint]
 ignore = ["UP035", "LOG015"]
+
+[tool.ruff.lint.per-file-ignores]
+# Re-exports fixtures and tests for pytest to find.
+"tests/kubevirt/test_shared.py" = ["PLC0414"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["susa"]
@@ -63,5 +69,4 @@ dev = [
     "pytest-xdist>=3.8.0",
     "ruff==0.16.9",
     "scapy>=2.7.0",
-    "types-pexpect>=4.9.0.20260518",
 ]

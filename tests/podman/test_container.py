@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -17,13 +18,13 @@ from susa.communicators.ssh import SSHCommunicator
 from susa.communicators.telnet import TelnetCommunicator
 from susa.core.communicator import HOST
 from susa.libvirt import (
-    Connection,
+    URI,
     LVMachine,
+    LVMachineModel,
     LVNetwork,
+    LVNetworkModel,
     LVVolume,
-    MachineModel,
-    NetworkModel,
-    VolumeModel,
+    LVVolumeModel,
 )
 from susa.libvirt.arch import host_arch
 from susa.podman.container import LibvirtContainer
@@ -38,13 +39,13 @@ ENVIRONMENT = ("SUSA_SESSION", "LIBVIRT_DEFAULT_URI", "SUSA_SUBNETS_LOCK")
 def container() -> Iterator[LibvirtContainer]:
     if shutil.which("podman") is None or not IMAGE.exists():
         pytest.skip(f"Needs podman and {IMAGE}")
-    defaults = (HOST.get(), Connection.URI.get(), SubnetReservation.LOCK.get())
+    defaults = (HOST.get(), URI.get(), SubnetReservation.LOCK.get())
     environment = [os.environ.get(name) for name in ENVIRONMENT]
     container = LibvirtContainer([str(IMAGE.parent)])
     logging.info("Starting the container")
     with container:
         yield container
-    assert (HOST.get(), Connection.URI.get(), SubnetReservation.LOCK.get()) == defaults
+    assert (HOST.get(), URI.get(), SubnetReservation.LOCK.get()) == defaults
     assert [os.environ.get(name) for name in ENVIRONMENT] == environment
     exists = ["podman", "container", "exists", container.name]
     assert subprocess.run(exists, check=False).returncode == 1
@@ -56,25 +57,24 @@ def test_defaults(container: LibvirtContainer) -> None:
     assert isinstance(host, ContainerCommunicator)
     code = """
 from susa.core.communicator import HOST
-from susa.libvirt import Connection
+from susa.libvirt._virsh import virsh
 from susa.utilities.networking import SubnetReservation
 
 print(vars(HOST.get()))
 print(SubnetReservation.LOCK.get())
-with Connection() as connection:
-    print(connection.conn.getURI())
+print(virsh("uri").strip())
 """
     output = subprocess.check_output([sys.executable, "-c", code]).decode()
-    lock, uri = SubnetReservation.LOCK.get(), Connection.URI.get()
+    lock, uri = SubnetReservation.LOCK.get(), URI.get()
     assert output.splitlines() == [str(vars(host)), str(lock), uri]
 
 
 def test_container(container: LibvirtContainer) -> None:
-    with Connection(), SubnetReservation() as subnet:
-        network_model = NetworkModel().default().ip(subnet.ip)
-        volume_model = VolumeModel().backing(IMAGE)
+    with SubnetReservation() as subnet:
+        network_model = LVNetworkModel().default().ip(subnet.ip)
+        volume_model = LVVolumeModel().backing(IMAGE)
         machine_model = (
-            MachineModel()
+            LVMachineModel()
             .arch(host_arch())
             .efi()
             .default()
@@ -94,6 +94,8 @@ def test_container(container: LibvirtContainer) -> None:
                 with shell(machine.ip, "root", "a") as communicator:
                     assert communicator.check("echo up") == b"up\n"
             with network.sniffer() as sniffer:
+                _ = sniffer.pcap
                 logging.info("Pinging the machine while sniffing its network")
                 assert None not in pings(machine.ip, 2, timeout=5, interval=0.5)
+                time.sleep(1)
             assert sum(ICMP in packet for packet in sniffer.packets()) >= 4

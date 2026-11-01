@@ -24,7 +24,6 @@ from susa.utilities.generic import Deadline
 # gzip, tar and mktemp aren't in the Unix spec, but they're everywhere.
 class UnixCommunicator(AsyncCommandRunner, FileTransferrer):
     PRINTF_CHUNK_SIZE = 512
-    WRITE_CHUNK_SIZE = 1 << 15
 
     def __init__(self, communicator: CommandRunner) -> None:
         self.communicator = communicator
@@ -113,11 +112,7 @@ class UnixCommunicator(AsyncCommandRunner, FileTransferrer):
         deadline = Deadline(timeout)
         compressed = gzip.compress(data)
         temporary = shlex.quote(self.temporary_file())
-        for i in range(0, len(compressed), UnixCommunicator.WRITE_CHUNK_SIZE):
-            command = self.printf_command(
-                compressed[i : i + UnixCommunicator.WRITE_CHUNK_SIZE], temporary
-            )
-            self.communicator.check(command, deadline.remaining())
+        self.append(compressed, temporary, deadline.remaining())
         self.communicator.check(
             f"gzip -dc < {temporary} > {shlex.quote(remote)} && rm {temporary}",
             deadline.remaining(),
@@ -130,16 +125,17 @@ class UnixCommunicator(AsyncCommandRunner, FileTransferrer):
     def temporary_file(self) -> str:
         return self.communicator.check("mktemp").decode().strip()
 
-    def printf_command(self, data: bytes, target: str) -> str:
-        return " &&\n".join(
-            "printf '"
-            + "".join(
+    # A command at a time, since a terminal drops what a slow shell hasn't read yet.
+    def append(self, data: bytes, target: str, timeout: float | None = None) -> None:
+        deadline = Deadline(timeout)
+        for i in range(0, len(data), UnixCommunicator.PRINTF_CHUNK_SIZE):
+            octal = "".join(
                 chr(b) if chr(b).isalnum() and b < 128 else f"\\{b:03o}"
                 for b in data[i : i + UnixCommunicator.PRINTF_CHUNK_SIZE]
             )
-            + f"' >> {target}"
-            for i in range(0, len(data), UnixCommunicator.PRINTF_CHUNK_SIZE)
-        )
+            self.communicator.check(
+                f"printf '{octal}' >> {target}", deadline.remaining()
+            )
 
 
 class UnixCommand(AsyncCommand):
@@ -200,8 +196,7 @@ class UnixCommand(AsyncCommand):
     def wait(self, timeout: float | None = None) -> int:
         deadline = Deadline(timeout)
         while (exit_code := self.poll()) is None:
-            if deadline.passed():
-                raise TimeoutError(f"The command didn't exit within {timeout} seconds")
+            deadline.test("The command didn't exit")
             time.sleep(UnixCommand.POLL_INTERVAL)
         return exit_code
 
@@ -226,7 +221,7 @@ class UnixInputStream(InputStream):
 
     @override
     def write(self, data: bytes) -> None:
-        self.unix.communicator.check(self.unix.printf_command(data, self.path))
+        self.unix.append(data, self.path)
 
     @override
     def close(self) -> None:

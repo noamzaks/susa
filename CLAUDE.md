@@ -9,20 +9,25 @@ around libvirt/QEMU virtual machines of many architectures.
 - What CI runs: `uv run pre-commit run --all-files`.
 - Always run tests with `scripts/test.sh` (pytest's arguments), which records each run for greendots in
   `/var/opt/greendots2/susa/<commit>-<n>` (the `susa` project).
-- Fast tests: `scripts/test.sh --ignore tests/libvirt/test_machine.py --ignore tests/podman`.
+- Podman runs the tests that need libvirt (`tests/libvirt/test_entities.py`, `tests/test_session.py`) in a `LibvirtContainer`.
+- Fast tests: `scripts/test.sh --ignore tests/libvirt/test_machine.py --ignore tests/podman --ignore
+  tests/kubevirt/test_machine.py --ignore tests/kubevirt/test_shared.py`.
 - Update XML snapshots after an intended model change: `scripts/test.sh tests/libvirt/test_models.py --snapshot-update`,
   then re-run without the flag and review the diff.
 - Real-VM tests: `scripts/test.sh tests/libvirt/test_machine.py -n 3` (more workers starve the host and time out), and
   `scripts/test.sh tests/podman` (builds the container's image the first time).
+- KubeVirt tests: `scripts/test.sh tests/kubevirt` (the real-VM ones need a cluster and the `debian` DataVolume).
+  `tests/kubevirt/test_shared.py` runs the libvirt line on each architecture (`-k <arch>`), which needs
+  `scripts/kubevirt-launcher/setup.sh`, a `debian-<arch>` DataVolume of each image and `debian-kernel:<arch>` images.
 
 ## Design
 
 - **Layers.** `susa.core` holds backend-independent contracts (abstract classes) only. `susa.libvirt` implements them,
-  `susa.communicators` runs commands over any stream, `susa.podman` runs libvirt in a container, `susa.recipes` makes
-  objects from JSON, and `susa.utilities` holds general helpers. Each is its own distribution in the uv workspace under
-  `packages/` (`susa-core` holds core and utilities), sharing the `susa` namespace package (so there's no
-  `susa/__init__.py`), and depends only on those below it: core, then communicators and libvirt, then podman, then
-  recipes.
+  `susa.communicators` runs commands over any stream, `susa.podman` runs libvirt in a container, `susa.kubevirt`
+  implements them on KubeVirt, `susa.recipes` makes objects from JSON, and `susa.utilities` holds general helpers. Each
+  is its own distribution in the uv workspace under `packages/` (`susa-core` holds core and utilities), sharing the `susa` namespace package (so there's no
+  `susa/__init__.py`), and depends only on those below it: core, then communicators, libvirt and kubevirt, then podman,
+  then recipes.
 - **Bottom up.** Parts are small and independent (models, entities, communicators), each can be a JSON recipe, and they
   connect directly (e.g. `machine.network(network)`, `SSHCommunicator(machine, ...)`, `{"$ref": "machine"}`).
   Conveniences are opt-in, generic and composable (e.g. `Session`); nothing imposes a layout or an orchestration.
@@ -33,8 +38,8 @@ around libvirt/QEMU virtual machines of many architectures.
   resource between concurrent users).
 - **Capabilities are mixins** (`Snapshottable`, `Powerable`, ...), checked with `isinstance`.
 - **Contracts stay loose.** Core types are ABCs with abstract properties; don't collapse them into concrete classes.
-- **Defaults are `Variable`s** (e.g. `HOST`, which commands run on, and `Connection.URI`), taken when an object is made,
-  and set for a `with` block. Their initial values may come from the environment (e.g. `HOST` from the `host` of the
+- **Defaults are `Variable`s** (e.g. `HOST`, which commands run on, taken when an object is made, and `URI`, taken when
+  virsh runs), and set for a `with` block. Their initial values may come from the environment (e.g. `HOST` from the `host` of the
   `SUSA_SESSION` recipe, see `susa.utilities.environment`), which is how `LibvirtContainer` passes its defaults on to
   processes started meanwhile; code otherwise never reads `os.environ`.
 - **Resources.** Anything with a lifetime is a `Resource` (`create()`/`destroy()`, a context manager). Factory methods
@@ -58,6 +63,9 @@ around libvirt/QEMU virtual machines of many architectures.
     helpers, then `get_*` getters.
   - Other classes: `__init__`, properties, the lifecycle (`create`/`destroy`/`lookup`), each capability's methods
     together (in the order of the bases), then serialization and helpers.
+- What's internal starts with `_` (methods at the end of their class, and modules like `susa.libvirt._virsh`). Packages
+  export with `from module import X as X`, not `__all__`.
+- No code runs at a module's top level beyond definitions, and nothing happens implicitly (e.g. waiting in `create`).
 - Log with the `logging` module's functions directly, not per-module loggers.
 - `# type: ignore` without error codes.
 - Optional/heavy dependencies (e.g. `PIL`, `scapy`) are imported lazily, with `TYPE_CHECKING` imports for annotations.

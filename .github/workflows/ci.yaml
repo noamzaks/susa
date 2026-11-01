@@ -18,7 +18,7 @@ jobs:
                   version: "0.11.16"
                   enable-cache: true
             - name: Install apt dependencies
-              run: sudo apt install -y pkg-config libvirt-dev python3-dev
+              run: sudo apt install -y libvirt-clients podman
             - name: Install the project
               run: uv sync --locked
             - name: Run pre-commit

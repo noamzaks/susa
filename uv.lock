@@ -3,13 +3,15 @@ revision = 5
 requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version >= '3.15'",
-    "python_full_version < '3.15'",
+    "python_full_version >= '3.11' and python_full_version < '3.15'",
+    "python_full_version < '3.11'",
 ]
 
 [manifest]
 members = [
     "susa-communicators",
     "susa-core",
+    "susa-kubevirt",
     "susa-libvirt",
     "susa-podman",
     "susa-recipes",
@@ -144,6 +146,14 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/2b/2d/5cb7a5ac017031e96a63173f3d57a8a5162ce36f9ff461e62bc6da4d88ab/filelock-4.0.6.tar.gz", hash = "sha256:323fab3b2fb22d889b29fa83774f60029addddb4b6a1bcfa1e73066eabffb5f2", size = 248237, upload-time = "2026-09-28T22:16:16.257Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a9/3b/b74ae9db2f78f1354278731372ae89870626be7b86cbb46b8d707acd1a98/filelock-4.0.6-py3-none-any.whl", hash = "sha256:9b139fb93b2ac5807f7feaf63aa4546fbd74074a2d3f554c040f40a4694d7b9f", size = 109077, upload-time = "2026-09-28T22:16:14.731Z" },
+]
+
+[[package]]
+name = "greendots"
+version = "0.3.0"
+source = { git = "https://github.com/noamzaks/greendots?subdirectory=greendots#439efcd86a48378cde44fb040e08feb911f9497c" }
+dependencies = [
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
 ]
 
 [[package]]
@@ -295,12 +305,6 @@ wheels = [
 ]
 
 [[package]]
-name = "libvirt-python"
-version = "12.7.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/00/19/729ba9584cac034ecaa8a42ebb6412007382dda13df635ac61adecd7e949/libvirt_python-12.7.0.tar.gz", hash = "sha256:03a6800a3cc7657267e2516f579ce95c93d6351182caf03f92a49556685bf8bf", size = 256560, upload-time = "2026-09-01T08:34:07.984Z" }
-
-[[package]]
 name = "mypy"
 version = "2.3.1"
 source = { registry = "https://pypi.org/simple" }
@@ -401,18 +405,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/5a/82/42f767fc1c1143d6fd36efb827202a2d997a375e160a71eb2888a925aac1/pathspec-1.1.1.tar.gz", hash = "sha256:17db5ecd524104a120e173814c90367a96a98d07c45b2e10c2f3919fff91bf5a", size = 135180, upload-time = "2026-04-27T01:46:08.907Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f1/d9/7fb5aa316bc299258e68c73ba3bddbc499654a07f151cba08f6153988714/pathspec-1.1.1-py3-none-any.whl", hash = "sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189", size = 57328, upload-time = "2026-04-27T01:46:07.06Z" },
-]
-
-[[package]]
-name = "pexpect"
-version = "4.9.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "ptyprocess" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/42/92/cc564bf6381ff43ce1f4d06852fc19a2f11d180f23dc32d9588bee2f149d/pexpect-4.9.0.tar.gz", hash = "sha256:ee7d41123f3c9911050ea2c2dac107568dc43b2d3b0c7557a33212c398ead30f", size = 166450, upload-time = "2023-11-25T09:07:26.339Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/9e/c3/059298687310d527a58bb01f3b1965787ee3b40dce76752eda8b44e9a2c5/pexpect-4.9.0-py2.py3-none-any.whl", hash = "sha256:7236d1e080e4936be2dc3e326cec0af72acf9212a7e1d060210e70a47e253523", size = 63772, upload-time = "2023-11-25T06:56:14.81Z" },
 ]
 
 [[package]]
@@ -541,15 +533,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/74/89/1f3e8e1fc3e97de0fa963495832f581f025f29471602a309e48808244292/pre_commit-4.6.2.tar.gz", hash = "sha256:8f5d7bfb021ecdbcd9d49d89847082dd24172ccde534390081a679ad046e2441", size = 198670, upload-time = "2026-08-10T22:07:18.421Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/45/e2/bbb7129c9e7999a6b8ee9cca3b66486c25c423ab5a75f34071798b74ce94/pre_commit-4.6.2-py2.py3-none-any.whl", hash = "sha256:e2dde9a75d3bce11bd3831c26d134df00a2803c1d818be6a0383c3dcda25dc4e", size = 226202, upload-time = "2026-08-10T22:07:16.942Z" },
-]
-
-[[package]]
-name = "ptyprocess"
-version = "0.7.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/20/e5/16ff212c1e452235a90aeb09066144d0c5a6a8c0834397e03f5224495c4e/ptyprocess-0.7.0.tar.gz", hash = "sha256:5c5d0a3b48ceee0b48485e0c26037c0acd7d29765ca3fbb5cb3831d347423220", size = 70762, upload-time = "2020-12-28T15:15:30.155Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/22/a6/858897256d0deac81a172289110f31629fc4cee19b6f01283303e18c8db3/ptyprocess-0.7.0-py2.py3-none-any.whl", hash = "sha256:4b41f3967fce3af57cc7e94b888626c18bf37a083e3651ca8feeb66d492fef35", size = 13993, upload-time = "2020-12-28T15:15:28.35Z" },
 ]
 
 [[package]]
@@ -738,9 +721,10 @@ wheels = [
 
 [[package]]
 name = "pytest-greendots"
-version = "0.2.0"
-source = { git = "https://github.com/noamzaks/greendots?subdirectory=pytest-greendots#27e0cbc9d0174f3c4c479054648f736c0e2689bb" }
+version = "0.3.0"
+source = { git = "https://github.com/noamzaks/greendots?subdirectory=pytest-greendots#439efcd86a48378cde44fb040e08feb911f9497c" }
 dependencies = [
+    { name = "greendots" },
     { name = "pytest" },
 ]
 
@@ -884,14 +868,12 @@ name = "susa-communicators"
 version = "0.1.0"
 source = { editable = "packages/susa-communicators" }
 dependencies = [
-    { name = "pexpect" },
     { name = "susa-core" },
     { name = "typing-extensions" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "pexpect", specifier = ">=4.9.0" },
     { name = "susa-core", editable = "packages/susa-core" },
     { name = "typing-extensions", specifier = ">=4.16.0" },
 ]
@@ -908,18 +890,31 @@ dependencies = [
 requires-dist = [{ name = "typing-extensions", specifier = ">=4.16.0" }]
 
 [[package]]
-name = "susa-libvirt"
+name = "susa-kubevirt"
 version = "0.1.0"
-source = { editable = "packages/susa-libvirt" }
+source = { editable = "packages/susa-kubevirt" }
 dependencies = [
-    { name = "libvirt-python" },
     { name = "susa-core" },
     { name = "typing-extensions" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "libvirt-python", specifier = ">=12.6.0" },
+    { name = "susa-core", editable = "packages/susa-core" },
+    { name = "typing-extensions", specifier = ">=4.16.0" },
+]
+
+[[package]]
+name = "susa-libvirt"
+version = "0.1.0"
+source = { editable = "packages/susa-libvirt" }
+dependencies = [
+    { name = "susa-core" },
+    { name = "typing-extensions" },
+]
+
+[package.metadata]
+requires-dist = [
     { name = "susa-core", editable = "packages/susa-core" },
     { name = "typing-extensions", specifier = ">=4.16.0" },
 ]
@@ -957,6 +952,9 @@ dependencies = [
 communicators = [
     { name = "susa-communicators" },
 ]
+kubevirt = [
+    { name = "susa-kubevirt" },
+]
 libvirt = [
     { name = "susa-libvirt" },
 ]
@@ -969,11 +967,12 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.13.4" },
     { name = "susa-communicators", marker = "extra == 'communicators'", editable = "packages/susa-communicators" },
     { name = "susa-core", editable = "packages/susa-core" },
+    { name = "susa-kubevirt", marker = "extra == 'kubevirt'", editable = "packages/susa-kubevirt" },
     { name = "susa-libvirt", marker = "extra == 'libvirt'", editable = "packages/susa-libvirt" },
     { name = "susa-podman", marker = "extra == 'podman'", editable = "packages/susa-podman" },
     { name = "typing-extensions", specifier = ">=4.16.0" },
 ]
-provides-extras = ["communicators", "libvirt", "podman"]
+provides-extras = ["communicators", "kubevirt", "libvirt", "podman"]
 
 [[package]]
 name = "susa-workspace"
@@ -982,9 +981,10 @@ source = { virtual = "." }
 dependencies = [
     { name = "susa-communicators" },
     { name = "susa-core" },
+    { name = "susa-kubevirt" },
     { name = "susa-libvirt" },
     { name = "susa-podman" },
-    { name = "susa-recipes", extra = ["communicators", "libvirt", "podman"] },
+    { name = "susa-recipes", extra = ["communicators", "kubevirt", "libvirt", "podman"] },
 ]
 
 [package.dev-dependencies]
@@ -1000,16 +1000,16 @@ dev = [
     { name = "pytest-xdist" },
     { name = "ruff" },
     { name = "scapy" },
-    { name = "types-pexpect" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "susa-communicators", editable = "packages/susa-communicators" },
     { name = "susa-core", editable = "packages/susa-core" },
+    { name = "susa-kubevirt", editable = "packages/susa-kubevirt" },
     { name = "susa-libvirt", editable = "packages/susa-libvirt" },
     { name = "susa-podman", editable = "packages/susa-podman" },
-    { name = "susa-recipes", extras = ["communicators", "libvirt", "podman"], editable = "packages/susa-recipes" },
+    { name = "susa-recipes", extras = ["communicators", "kubevirt", "libvirt", "podman"], editable = "packages/susa-recipes" },
 ]
 
 [package.metadata.requires-dev]
@@ -1025,7 +1025,6 @@ dev = [
     { name = "pytest-xdist", specifier = ">=3.8.0" },
     { name = "ruff", specifier = "==0.16.9" },
     { name = "scapy", specifier = ">=2.7.0" },
-    { name = "types-pexpect", specifier = ">=4.9.0.20260518" },
 ]
 
 [[package]]
@@ -1080,15 +1079,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/12/64/da524626d3b9cc40c168a13da8335fe1c51be12c0a63685cc6db7308daae/tomli-2.4.1-cp314-cp314t-win_amd64.whl", hash = "sha256:2c1c351919aca02858f740c6d33adea0c5deea37f9ecca1cc1ef9e884a619d26", size = 121196, upload-time = "2026-03-25T20:22:01.169Z" },
     { url = "https://files.pythonhosted.org/packages/5a/cd/e80b62269fc78fc36c9af5a6b89c835baa8af28ff5ad28c7028d60860320/tomli-2.4.1-cp314-cp314t-win_arm64.whl", hash = "sha256:eab21f45c7f66c13f2a9e0e1535309cee140182a9cdae1e041d02e47291e8396", size = 100393, upload-time = "2026-03-25T20:22:02.137Z" },
     { url = "https://files.pythonhosted.org/packages/7b/61/cceae43728b7de99d9b847560c262873a1f6c98202171fd5ed62640b494b/tomli-2.4.1-py3-none-any.whl", hash = "sha256:0d85819802132122da43cb86656f8d1f8c6587d54ae7dcaf30e90533028b49fe", size = 14583, upload-time = "2026-03-25T20:22:03.012Z" },
-]
-
-[[package]]
-name = "types-pexpect"
-version = "4.9.0.20260518"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/ee/84/c52c4841aeaf1d56551f14335ca99a40e7e04b4f8358b402115910828e8e/types_pexpect-4.9.0.20260518.tar.gz", hash = "sha256:38c373798209428dd90988b6fd4b8839c68c7e3ed79215f1ab11fa42d7ff9427", size = 13568, upload-time = "2026-05-18T06:03:35.378Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/01/11/17b1da645d5f2a12e4db83ae38dbb732fbac96fb3bd7416635c844f7d24e/types_pexpect-4.9.0.20260518-py3-none-any.whl", hash = "sha256:bf2422e825e4efe29cc4a1b7bdc3c375ae97d9c3046ce6b2018c100fb049c262", size = 17087, upload-time = "2026-05-18T06:03:34.14Z" },
 ]
 
 [[package]]

@@ -2,16 +2,20 @@ from __future__ import annotations
 
 import bisect
 import xml.etree.ElementTree as ET
+from collections.abc import Mapping, Sequence
 
 from typing_extensions import Self, override
 
 
 def node(
-    tag: str, text: str | None = None, /, *children: ET.Element, **attributes: str
+    tag: str,
+    elements: Sequence[ET.Element] = (),
+    attrs: Mapping[str, str] | None = None,
+    text: str | None = None,
 ) -> ET.Element:
-    element = ET.Element(tag, dict(sorted(attributes.items())))
+    element = ET.Element(tag, dict(sorted((attrs or {}).items())))
     element.text = text
-    for other in children:
+    for other in elements:
         add(element, other)
     return element
 
@@ -39,7 +43,7 @@ def put(parent: ET.Element, element: ET.Element) -> None:
     add(parent, element)
 
 
-class Model:
+class LVModel:
     element: ET.Element
 
     def build(self) -> str:

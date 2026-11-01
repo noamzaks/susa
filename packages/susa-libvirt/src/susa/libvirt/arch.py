@@ -8,6 +8,7 @@ from pathlib import Path
 @dataclass(frozen=True)
 class ArchDefaults:
     machine: str
+    disk_bus: str
     acpi: bool = True
     gic: bool = False
     # The CPU when emulating (KVM passes the host's through).
@@ -16,7 +17,6 @@ class ArchDefaults:
     # Extra QEMU arguments libvirt has no XML for.
     qemu_args: tuple[str, ...] = ()
 
-    disk_bus: str | None = None
     nic: str = "e1000"
     # If set, the only PCI slots that get an interrupt (libvirt would pick others).
     pci_slots: tuple[int, ...] | None = None
