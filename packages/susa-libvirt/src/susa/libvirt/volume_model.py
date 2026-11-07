@@ -56,3 +56,7 @@ class LVVolumeModel(LVModel):
 
     def get_pool(self) -> str:
         return self.pool_name
+
+    def get_backing(self) -> str | None:
+        path = self.element.find("backingStore/path")
+        return None if path is None else path.text
