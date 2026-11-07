@@ -38,7 +38,7 @@ around libvirt/QEMU virtual machines of many architectures.
   resource between concurrent users).
 - **Capabilities are mixins** (`Snapshottable`, `Powerable`, ...), checked with `isinstance`.
 - **Contracts stay loose.** Core types are ABCs with abstract properties; don't collapse them into concrete classes.
-- **Defaults are `Variable`s** (e.g. `HOST`, which commands run on, taken when an object is made, and `URI`, taken when
+- **Defaults are `Variable`s** (e.g. `HOST`, which commands run on, taken when an object is made, and `LVURI`, taken when
   virsh runs), and set for a `with` block. `EnvironmentVariable`s (e.g. `HOST` in `SUSA_HOST`) are also kept in the
   environment while they're set (as JSON, `Serializable` values by `serialize`), and start from it, which is how
   `LibvirtContainer` passes its defaults on to processes started meanwhile; code otherwise never reads `os.environ`.

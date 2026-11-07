@@ -18,7 +18,7 @@ from susa.communicators.ssh import SSHCommunicator
 from susa.communicators.telnet import TelnetCommunicator
 from susa.core.communicator import HOST
 from susa.libvirt import (
-    URI,
+    LVURI,
     LVMachine,
     LVMachineModel,
     LVNetwork,
@@ -43,13 +43,13 @@ def needs_podman() -> None:
 @pytest.fixture
 def container() -> Iterator[LibvirtContainer]:
     needs_podman()
-    defaults = (HOST.get(), URI.get(), SubnetReservation.LOCK.get())
+    defaults = (HOST.get(), LVURI.get(), SubnetReservation.LOCK.get())
     environment = [os.environ.get(name) for name in ENVIRONMENT]
     container = LibvirtContainer([str(IMAGE.parent)])
     logging.info("Starting the container")
     with container:
         yield container
-    assert (HOST.get(), URI.get(), SubnetReservation.LOCK.get()) == defaults
+    assert (HOST.get(), LVURI.get(), SubnetReservation.LOCK.get()) == defaults
     assert [os.environ.get(name) for name in ENVIRONMENT] == environment
     exists = ["podman", "container", "exists", container.name]
     assert subprocess.run(exists, check=False).returncode == 1
@@ -69,7 +69,7 @@ print(SubnetReservation.LOCK.get())
 print(virsh("uri").strip())
 """
     output = subprocess.check_output([sys.executable, "-c", code]).decode()
-    lock, uri = SubnetReservation.LOCK.get(), URI.get()
+    lock, uri = SubnetReservation.LOCK.get(), LVURI.get()
     assert output.splitlines() == [str(vars(host)), str(lock), uri]
 
 

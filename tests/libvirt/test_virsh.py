@@ -4,7 +4,7 @@ import subprocess
 
 import pytest
 
-from susa.libvirt._virsh import URI, virsh
+from susa.libvirt._virsh import LVURI, virsh
 
 
 def test_default_uri(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -13,10 +13,10 @@ def test_default_uri(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_uri_variable() -> None:
-    with URI.set("test:///default"):
+    with LVURI.set("test:///default"):
         assert virsh("uri").strip() == "test:///default"
 
 
 def test_error() -> None:
-    with URI.set("test:///default"), pytest.raises(subprocess.CalledProcessError):
+    with LVURI.set("test:///default"), pytest.raises(subprocess.CalledProcessError):
         virsh("dominfo", "nothing")

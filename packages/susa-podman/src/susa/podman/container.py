@@ -12,7 +12,7 @@ from typing_extensions import override
 from susa.communicators.container import ContainerCommunicator
 from susa.core.communicator import HOST
 from susa.core.resource import Resource
-from susa.libvirt._virsh import URI
+from susa.libvirt._virsh import LVURI
 from susa.utilities.generic import Guard, random_id, wait_until
 from susa.utilities.networking import SubnetReservation
 
@@ -66,7 +66,7 @@ class LibvirtContainer(Resource):
         uri = f"qemu+unix:///system?socket={socket}"
         lock = self.directory / "subnets.lock"
         self.defaults.enter_context(HOST.set(ContainerCommunicator(pid)))
-        self.defaults.enter_context(URI.set(uri))
+        self.defaults.enter_context(LVURI.set(uri))
         self.defaults.enter_context(SubnetReservation.LOCK.set(str(lock)))
 
     @override

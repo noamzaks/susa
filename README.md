@@ -11,7 +11,7 @@ communicator keeps trying to connect while its machine boots:
 ```python
 from susa.communicators.ssh import SSHCommunicator
 from susa.libvirt import (
-    URI,
+    LVURI,
     LVMachine,
     LVNetwork,
     LVVolume,
@@ -22,7 +22,7 @@ from susa.libvirt import (
 from susa.utilities.generic import GIGA
 from susa.utilities.networking import SubnetReservation
 
-with URI.set("qemu:///system"), SubnetReservation() as subnet:
+with LVURI.set("qemu:///system"), SubnetReservation() as subnet:
     # A network on a free subnet, and a volume keeping the machine's changes off the image.
     network_model = LVNetworkModel().default().ip(subnet.ip)
     volume_model = LVVolumeModel().backing("/machines/debian_x86_64.qcow2")
@@ -78,11 +78,11 @@ make is created.
 from pathlib import Path
 
 from susa.communicators.ssh import SSHCommunicator
-from susa.libvirt import URI
+from susa.libvirt import LVURI
 from susa.recipes.session import Session
 
 debian = Session.model_validate_json(Path("debian.json").read_text())
-with URI.set("qemu:///system"), debian:
+with LVURI.set("qemu:///system"), debian:
     print(debian.get("ssh", SSHCommunicator).check("uname -a"))
 ```
 
@@ -102,7 +102,7 @@ kept in `SUSA_HOST`, `SUSA_URI` and `SUSA_SUBNETS_LOCK` while they're set, so pr
 Python programs using SUSA) default to it too:
 
 ```python
-from susa.libvirt import URI
+from susa.libvirt import LVURI
 from susa.podman.container import LibvirtContainer
 
 with LibvirtContainer(mounts=["/machines"]):

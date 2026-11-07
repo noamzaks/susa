@@ -29,7 +29,7 @@ from susa.libvirt import (
     LVVolume,
     LVVolumeModel,
 )
-from susa.libvirt._virsh import URI, virsh
+from susa.libvirt._virsh import LVURI, virsh
 from susa.recipes import Recipe
 from susa.recipes.session import Session
 from susa.utilities.generic import GIGA, wait_until
@@ -172,7 +172,7 @@ def boot(machine: LVMachine) -> None:
 
 @pytest.fixture(scope="session")
 def uri() -> Iterator[None]:
-    with URI.set("qemu:///system"):
+    with LVURI.set("qemu:///system"):
         yield
 
 
