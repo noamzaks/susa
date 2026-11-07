@@ -23,9 +23,11 @@ class ShellCommunicator(CommandRunner):
     EXIT = re.compile(rb"SUSA-EXIT-(\d+)\r?\n")
     MARK_EXIT = b"echo SUSA-EXIT-$?"
     READY = "SUSA-READY"
+    HUNG_UP = b"SUSA-HUNG-UP\n"
+    HANG_UP = b"echo SUSA-HUNG-UP; kill -HUP 0"
     # No line editing (which may reset the terminal's settings), job notifications, echo, output translation, bells
     # (when input fills up) or prompts, so the output of commands is exactly what they wrote.
-    SETUP = b"set +m +o emacs +o vi; stty -echo -opost -imaxbel; PS1=''; PS2=''"
+    SETUP = b"set +m +o emacs +o vi; stty -echo -opost -imaxbel; PS1=''; PS2=''; PROMPT_COMMAND=''"
     CONNECT_TIMEOUT = 600
     SETUP_TIMEOUT = 60
     RECONNECT_INTERVAL = 1
@@ -107,11 +109,18 @@ class ShellCommunicator(CommandRunner):
     @override
     def destroy(self) -> None:
         assert self.stream is not None
-        # Its client may be gone already (e.g. Ctrl-C reaches it too).
-        with contextlib.suppress(BrokenPipeError):
-            self.stream.write(b"exit" + ShellCommunicator.ENTER)
-        self.stream.close()
-        self.stream = None
+        # Hangs up its process group, the shell and what it started (as job control is off), like a terminal's hangup
+        # would (which doesn't reach them on serial consoles, or under shells that aren't the session's leader). Once
+        # the shell read it (the client may lose what it didn't pass on yet), unless the client is gone already.
+        try:
+            with contextlib.suppress(BrokenPipeError):
+                self.stream.write(ShellCommunicator.HANG_UP + ShellCommunicator.ENTER)
+                self.stream.read_until(
+                    ShellCommunicator.HUNG_UP, ShellCommunicator.SETUP_ATTEMPT_TIMEOUT
+                )
+        finally:
+            self.stream.close()
+            self.stream = None
 
     @override
     def run(

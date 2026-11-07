@@ -44,6 +44,23 @@ def wait_until(
         time.sleep(interval)
 
 
+# Runs a command on this system once it's released, or once this process ends however it does (as the pipe the command
+# waits on closes then).
+class Guard:
+    def __init__(self, command: str) -> None:
+        # In a session of its own, so that what stops this process' group (e.g. Ctrl-C) doesn't stop it.
+        self.process = subprocess.Popen(
+            ["sh", "-c", f"read _; {command}"],
+            stdin=subprocess.PIPE,
+            start_new_session=True,
+        )
+
+    def release(self) -> None:
+        assert self.process.stdin is not None
+        self.process.stdin.close()
+        self.process.wait()
+
+
 def run(
     command: Sequence[str],
     stdin: str | None = None,

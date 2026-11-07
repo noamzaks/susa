@@ -3,7 +3,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-import shutil
+import shlex
 import subprocess
 import tempfile
 from collections.abc import Generator, Mapping, Sequence
@@ -15,7 +15,7 @@ from susa.communicators.container import ContainerCommunicator
 from susa.core.communicator import HOST
 from susa.core.resource import Resource
 from susa.libvirt._virsh import URI
-from susa.utilities.generic import random_id, wait_until
+from susa.utilities.generic import Guard, random_id, wait_until
 from susa.utilities.networking import SubnetReservation
 
 
@@ -42,6 +42,10 @@ class LibvirtContainer(Resource):
     def create(self) -> None:
         assert self.directory is None
         self.directory = Path(tempfile.mkdtemp(prefix="susa-"))
+        # Removes it when it's destroyed, or when this process ends first.
+        remove = ["podman", "rm", "--force", "--time=0", "--ignore", self.name]
+        directory = shlex.quote(str(self.directory))
+        self.guard = Guard(f"{shlex.join(remove)} > /dev/null; rm -r {directory}")
         socket = self.directory / "libvirt/virtqemud-sock"
         socket.parent.mkdir()
         if self.podman("image", "exists", self.image, check=False).returncode:
@@ -79,8 +83,7 @@ class LibvirtContainer(Resource):
     def destroy(self) -> None:
         assert self.directory is not None
         self.defaults.close()
-        self.podman("rm", "--force", "--time=0", self.name)
-        shutil.rmtree(self.directory)
+        self.guard.release()
         self.directory = None
 
     def options(self) -> list[str]:

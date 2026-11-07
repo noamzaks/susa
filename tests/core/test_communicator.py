@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import subprocess
+import sys
+import time
+
 import pytest
 
 from susa.core.communicator import HostAsyncCommandRunner
@@ -35,3 +39,31 @@ def test_start_kill() -> None:
         command.wait(timeout=0.2)
     command.kill()
     assert command.wait(timeout=5) == -9
+
+
+def sleeping(seconds: int) -> bool:
+    time.sleep(0.5)
+    command = ["pgrep", "-fx", f"sleep {seconds}"]
+    return subprocess.run(command, check=False).returncode == 0
+
+
+# What it started stops with it, unlike the shell alone.
+def test_start_kill_all() -> None:
+    command = HOST.start("sleep 3610; true")
+    assert sleeping(3610)
+    command.kill()
+    assert command.wait(timeout=5) == -9
+    assert not sleeping(3610)
+
+
+# Commands stop when this process ends, even when it's killed.
+def test_crash() -> None:
+    code = """
+import os, signal, time
+from susa.core.communicator import HostAsyncCommandRunner
+HostAsyncCommandRunner().start("sleep 3611; true")
+time.sleep(0.5)
+os.kill(os.getpid(), signal.SIGKILL)
+"""
+    subprocess.run([sys.executable, "-c", code], check=False)
+    assert not sleeping(3611)
