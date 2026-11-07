@@ -90,6 +90,15 @@ class LVMachine(
             flags.append("--nvram")
         virsh("undefine", self.name, *flags)
 
+    # Saves its memory, stopping it (its volumes then stay as the memory has them).
+    def save(self, path: str | Path) -> None:
+        virsh("save", self.name, str(path), "--image-format", "zstd")
+
+    # Creates it with what `save` saved. libvirt restores only the XML it saved, with its UUID.
+    def restore(self, path: str | Path) -> None:
+        virsh_xml(virsh("save-image-dumpxml", str(path)), "define")
+        virsh("restore", str(path))
+
     @override
     def snapshot(self) -> LVSnapshot:
         return LVSnapshot(machine=self)

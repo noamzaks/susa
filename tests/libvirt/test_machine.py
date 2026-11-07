@@ -7,7 +7,7 @@ import random
 import shutil
 import subprocess
 import time
-from collections.abc import Generator, Iterator
+from collections.abc import Callable, Generator, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -19,10 +19,12 @@ from susa.communicators.shell import ShellCommunicator
 from susa.communicators.unix import UnixCommunicator
 from susa.core.communicator import FileTransferrer
 from susa.core.machine import wait_until_booted
+from susa.core.resource import Resource
 from susa.libvirt import (
     LVMachine,
     LVNetwork,
     LVSnapshot,
+    LVState,
     LVVolume,
     LVVolumeModel,
 )
@@ -196,9 +198,18 @@ def ready(session: Session) -> Iterator[LVSnapshot]:
         yield snapshot
 
 
+def entities(session: Session) -> list[Resource]:
+    return [session.get(n, Resource) for n in ("network", "volume", "machine")]
+
+
 @pytest.fixture
-def machine(session: Session, ready: LVSnapshot) -> Iterator[LVMachine]:
+def machine(
+    session: Session,
+    ready: LVSnapshot,
+    save_if_failed: Callable[[Sequence[Resource]], None],
+) -> Iterator[LVMachine]:
     yield session.get("machine", LVMachine)
+    save_if_failed(entities(session))
     logging.info("Reverting the machine to its snapshot")
     ready.revert()
 
@@ -381,6 +392,27 @@ def test_commit(
     with Session.model_validate({"objects": recipe}) as session:
         ssh = session.get("ssh", ShellCommunicator)
         assert ssh.check("cat /root/susa-commit") == b"committed\n"
+
+
+# A machine comes back as it was saved, running and with what it wrote, once its resources are gone (tried on one,
+# small image).
+def test_save(name: str, uri: None, tmp_path: Path) -> None:
+    if name != "freebsd10":
+        pytest.skip("Saving is tried on freebsd10")
+    with Session.model_validate({"objects": IMAGES[name].session()}) as session:
+        boot(session.get("machine", LVMachine))
+        with shell(session.get("machine", LVMachine), "ssh") as ssh:
+            ssh.check("echo saved > /root/susa-save")
+            booted = ssh.check("sysctl -n kern.boottime")
+        logging.info("Saving the machine")
+        LVState.save(entities(session), tmp_path / "state")
+    logging.info("Restoring the machine")
+    with LVState(tmp_path / "state") as state:
+        machine = state.resources[2]
+        assert isinstance(machine, LVMachine)
+        with shell(machine, "ssh") as ssh:
+            assert ssh.check("cat /root/susa-save") == b"saved\n"
+            assert ssh.check("sysctl -n kern.boottime") == booted
 
 
 def qemu(*args: str | Path) -> None:
