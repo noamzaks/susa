@@ -10,7 +10,7 @@ from susa.core.variable import EnvironmentVariable
 from susa.utilities.generic import run
 
 # `None` is libvirt's default, `LIBVIRT_DEFAULT_URI`.
-LVURI: EnvironmentVariable[str | None] = EnvironmentVariable("SUSA_URI", None)
+LVURI: EnvironmentVariable[str | None] = EnvironmentVariable("SUSA_LVURI", None)
 
 
 def virsh_command(*args: str) -> list[str]:

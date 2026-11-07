@@ -98,7 +98,7 @@ Consoles run on a terminal from `script` (`util-linux-script` on Fedora).
 the first time). Until it's destroyed, virsh defaults to it, and the host is a
 `susa.communicators.container.ContainerCommunicator`, which runs commands (with this system's programs) in the
 container's user and network namespaces, where they reach its machines. These defaults are `EnvironmentVariable`s,
-kept in `SUSA_HOST`, `SUSA_URI` and `SUSA_SUBNETS_LOCK` while they're set, so processes started meanwhile (e.g. other
+kept in `SUSA_HOST`, `SUSA_LVURI` and `SUSA_SUBNETS_LOCK` while they're set, so processes started meanwhile (e.g. other
 Python programs using SUSA) default to it too:
 
 ```python
