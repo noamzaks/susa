@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from typing_extensions import override
 
 from susa.core.communicator import AsyncCommand, HostAsyncCommandRunner
+from susa.core.serializable import JSON
 
 
 # Runs commands in a process' namespaces (e.g. a container's user, network and PID ones), with this system's programs
@@ -28,3 +29,15 @@ class ContainerCommunicator(HostAsyncCommandRunner):
             "--preserve-credentials",
         ]
         return super().start(shlex.join([*nsenter, "sh", "-c", command]))
+
+    @override
+    def __getstate__(self) -> JSON:
+        return {"pid": self.pid, "namespaces": list[JSON](self.namespaces)}
+
+    @override
+    def __setstate__(self, state: JSON) -> None:
+        assert isinstance(state, dict)
+        pid, namespaces = state["pid"], state["namespaces"]
+        assert isinstance(pid, int) and isinstance(namespaces, list)
+        self.pid = pid
+        self.namespaces = [str(namespace) for namespace in namespaces]

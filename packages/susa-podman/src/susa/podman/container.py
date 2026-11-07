@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import contextlib
-import json
-import os
 import shlex
 import subprocess
 import tempfile
-from collections.abc import Generator, Mapping, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 
 from typing_extensions import override
@@ -20,8 +18,8 @@ from susa.utilities.networking import SubnetReservation
 
 
 # libvirt in a rootless container (of the image, built if it's missing). Until it's destroyed, virsh defaults to it,
-# and commands that run on the host (e.g. ssh's) run in its network, where they reach its machines. So do those of
-# processes started meanwhile, through the environment.
+# and commands that run on the host (e.g. ssh's) run in its network, where they reach its machines, also in processes
+# started meanwhile.
 class LibvirtContainer(Resource):
     CONTEXT = Path(__file__).parent / "image"
 
@@ -69,15 +67,7 @@ class LibvirtContainer(Resource):
         lock = self.directory / "subnets.lock"
         self.defaults.enter_context(HOST.set(ContainerCommunicator(pid)))
         self.defaults.enter_context(URI.set(uri))
-        self.defaults.enter_context(SubnetReservation.LOCK.set(lock))
-        cls = ContainerCommunicator
-        host = {f"{cls.__module__}.{cls.__qualname__}": {"pid": pid}}
-        environment = {
-            "SUSA_SESSION": json.dumps({"objects": [{"host": host}]}),
-            "LIBVIRT_DEFAULT_URI": uri,
-            "SUSA_SUBNETS_LOCK": str(lock),
-        }
-        self.defaults.enter_context(self.environment(environment))
+        self.defaults.enter_context(SubnetReservation.LOCK.set(str(lock)))
 
     @override
     def destroy(self) -> None:
@@ -105,20 +95,6 @@ class LibvirtContainer(Resource):
         return int(
             self.podman("inspect", "--format", "{{.State.Pid}}", self.name).stdout
         )
-
-    @staticmethod
-    @contextlib.contextmanager
-    def environment(variables: Mapping[str, str]) -> Generator[None, None, None]:
-        previous = {name: os.environ.get(name) for name in variables}
-        os.environ.update(variables)
-        try:
-            yield
-        finally:
-            for name, value in previous.items():
-                if value is None:
-                    del os.environ[name]
-                else:
-                    os.environ[name] = value
 
     def podman(
         self, *args: str, check: bool = True

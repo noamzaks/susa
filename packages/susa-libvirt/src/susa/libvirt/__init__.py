@@ -9,6 +9,5 @@ from susa.libvirt.machine_model import LVMachineModel as LVMachineModel
 from susa.libvirt.machine_model import LVSnapshotModel as LVSnapshotModel
 from susa.libvirt.network import LVNetwork as LVNetwork
 from susa.libvirt.network_model import LVNetworkModel as LVNetworkModel
-from susa.libvirt.state import LVState as LVState
 from susa.libvirt.volume import LVVolume as LVVolume
 from susa.libvirt.volume_model import LVVolumeModel as LVVolumeModel

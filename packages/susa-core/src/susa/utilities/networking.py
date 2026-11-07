@@ -16,7 +16,7 @@ from typing_extensions import override
 
 from susa.core.communicator import HOST, AsyncCommandRunner, CommandRunner
 from susa.core.resource import Resource
-from susa.core.variable import Variable
+from susa.core.variable import EnvironmentVariable, Variable
 from susa.utilities.generic import wait_until
 
 PING_REPLY_PATTERN = re.compile(r"icmp_seq=(\d+)\b.*?\btime=([\d.]+) ms")
@@ -85,11 +85,9 @@ def random_mac(prefix: str | None = None) -> str:
 # A /24 of the given subnets overlapping none of the host's routes, reserved across processes by locking its byte (its
 # number among all /24s) of the lock file.
 class SubnetReservation(Resource):
-    LOCK: ClassVar[Variable[Path]] = Variable(
-        Path(
-            os.environ.get("SUSA_SUBNETS_LOCK")
-            or Path(tempfile.gettempdir()) / "susa-subnets.lock"
-        )
+    LOCK: ClassVar[Variable[str]] = EnvironmentVariable(
+        "SUSA_SUBNETS_LOCK",
+        default_factory=lambda: str(Path(tempfile.gettempdir()) / "susa-subnets.lock"),
     )
     # A process' own locks don't stop it.
     TAKEN: ClassVar[set[tuple[Path, int]]] = set()

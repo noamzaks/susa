@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import os
 import random
@@ -20,11 +21,11 @@ from susa.communicators.unix import UnixCommunicator
 from susa.core.communicator import FileTransferrer
 from susa.core.machine import wait_until_booted
 from susa.core.resource import Resource
+from susa.core.saveable import SavedResources, save
 from susa.libvirt import (
     LVMachine,
     LVNetwork,
     LVSnapshot,
-    LVState,
     LVVolume,
     LVVolumeModel,
 )
@@ -67,7 +68,11 @@ class Image:
                     NETWORK_MODEL: ["default", {"ip": {"$ref": "subnet.ip"}}]
                 }
             },
-            {"volume_model": {VOLUME_MODEL: [{"backing": str(path or self.path)}]}},
+            {
+                "volume_model": {
+                    VOLUME_MODEL: [{"backing": str(path or self.path)}, "default"]
+                }
+            },
             {"machine_model": {MACHINE_MODEL: machine}},
             {"network": {LV_NETWORK: {"model": {"$ref": "network_model"}}}},
             {"volume": {LV_VOLUME: {"model": {"$ref": "volume_model"}}}},
@@ -198,10 +203,6 @@ def ready(session: Session) -> Iterator[LVSnapshot]:
         yield snapshot
 
 
-def entities(session: Session) -> list[Resource]:
-    return [session.get(n, Resource) for n in ("network", "volume", "machine")]
-
-
 @pytest.fixture
 def machine(
     session: Session,
@@ -209,7 +210,7 @@ def machine(
     save_if_failed: Callable[[Sequence[Resource]], None],
 ) -> Iterator[LVMachine]:
     yield session.get("machine", LVMachine)
-    save_if_failed(entities(session))
+    save_if_failed(session.all(Resource))
     logging.info("Reverting the machine to its snapshot")
     ready.revert()
 
@@ -398,7 +399,7 @@ def test_commit(
     machine.shutdown()
     wait_until(lambda: not machine.is_powered_on, BOOT_TIMEOUT)
     logging.info("Committing its volume into %s", committed)
-    volume.commit(committed)
+    volume.commit(str(committed))
     recipe = [*IMAGES[name].session(committed), {"ssh": COMMUNICATORS["ssh"]}]
     logging.info("Booting a machine from the committed image")
     with Session.model_validate({"objects": recipe}) as session:
@@ -417,11 +418,10 @@ def test_save(name: str, uri: None, tmp_path: Path) -> None:
             ssh.check("echo saved > /root/susa-save")
             booted = ssh.check("sysctl -n kern.boottime")
         logging.info("Saving the machine")
-        LVState.save(entities(session), tmp_path / "state")
+        saved = json.dumps(save(session.all(Resource)))
     logging.info("Restoring the machine")
-    with LVState(tmp_path / "state") as state:
-        machine = state.resources[2]
-        assert isinstance(machine, LVMachine)
+    with SavedResources(json.loads(saved)) as restored:
+        [machine] = [r for r in restored.resources if isinstance(r, LVMachine)]
         with shell(machine, "ssh") as ssh:
             assert ssh.check("cat /root/susa-save") == b"saved\n"
             assert ssh.check("sysctl -n kern.boottime") == booted
@@ -435,7 +435,7 @@ def qemu(*args: str | Path) -> None:
 def test_commit_into_backing(uri: None, tmp_path: Path) -> None:
     image = tmp_path / "image.qcow2"
     qemu("qemu-img", "create", "-f", "qcow2", image, "1M")
-    with LVVolume(LVVolumeModel().backing(image)) as volume:
+    with LVVolume(LVVolumeModel().backing(image).default()) as volume:
         # What a machine would have written to it.
         written = tmp_path / "written.qcow2"
         qemu("qemu-img", "create", "-f", "qcow2", "-b", image, "-F", "qcow2", written)

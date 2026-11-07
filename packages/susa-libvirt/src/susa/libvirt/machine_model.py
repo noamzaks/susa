@@ -246,6 +246,11 @@ class LVMachineModel(LVModel):
     def get_interfaces(self) -> list[LVInterfaceModel]:
         return [LVInterfaceModel.of(i) for i in self._devices.findall("interface")]
 
+    # The pools and names of the volumes it has as disks.
+    def get_volumes(self) -> list[tuple[str, str]]:
+        sources = self._devices.findall("disk[@type='volume']/source")
+        return [(s.attrib["pool"], s.attrib["volume"]) for s in sources]
+
     @property
     def _defaults(self) -> ArchDefaults:
         return ARCH_DEFAULTS[self.get_arch()]

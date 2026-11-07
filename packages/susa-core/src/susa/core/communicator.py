@@ -10,9 +10,9 @@ from subprocess import CompletedProcess
 from typing_extensions import override
 
 from susa.core.resource import Resource
+from susa.core.serializable import JSON, Serializable
 from susa.core.stream import FileStream, InputOutputStream, InputStream, OutputStream
-from susa.core.variable import Variable
-from susa.utilities.environment import default
+from susa.core.variable import EnvironmentVariable
 from susa.utilities.generic import Deadline, Guard
 
 
@@ -127,7 +127,7 @@ class AsyncCommandRunner(CommandRunner):
         return result
 
 
-class HostAsyncCommandRunner(AsyncCommandRunner):
+class HostAsyncCommandRunner(AsyncCommandRunner, Serializable):
     @override
     def create(self) -> None:
         pass
@@ -139,6 +139,14 @@ class HostAsyncCommandRunner(AsyncCommandRunner):
     @override
     def start(self, command: str) -> AsyncCommand:
         return HostAsyncCommand(command)
+
+    @override
+    def __getstate__(self) -> JSON:
+        return {}
+
+    @override
+    def __setstate__(self, state: JSON) -> None:
+        pass
 
 
 class HostAsyncCommand(AsyncCommand):
@@ -200,8 +208,6 @@ class HostAsyncCommand(AsyncCommand):
 
 
 # What commands run on (by default) when they run "on the host", e.g. clients of remote shells or ping.
-HOST = Variable[AsyncCommandRunner](
-    default_factory=lambda: (
-        default("host", AsyncCommandRunner) or HostAsyncCommandRunner()
-    )
+HOST = EnvironmentVariable[AsyncCommandRunner](
+    "SUSA_HOST", default_factory=HostAsyncCommandRunner
 )

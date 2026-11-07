@@ -20,6 +20,3 @@ module-name = "susa.libvirt"
 
 [tool.uv.sources]
 susa-core = { workspace = true }
-
-[project.entry-points.pytest11]
-susa-libvirt = "susa.libvirt.pytest_plugin"

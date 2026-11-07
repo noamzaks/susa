@@ -100,7 +100,7 @@ def test_subnet_reservation_lock(tmp_path: Path) -> None:
         SubnetReservation(lock=tmp_path / "a") as other,
     ):
         assert a.subnet == b.subnet != other.subnet
-    with SubnetReservation.LOCK.set(tmp_path / "c"), SubnetReservation():
+    with SubnetReservation.LOCK.set(str(tmp_path / "c")), SubnetReservation():
         assert (tmp_path / "c").exists()
 
 
@@ -114,7 +114,8 @@ def test_subnet_reservation_subnets(tmp_path: Path) -> None:
 
 
 def test_subnet_reservation_lock_environment(tmp_path: Path) -> None:
-    environment = {**os.environ, "SUSA_SUBNETS_LOCK": str(tmp_path / "lock")}
+    lock = json.dumps(str(tmp_path / "lock"))
+    environment = {**os.environ, "SUSA_SUBNETS_LOCK": lock}
     code = "from susa.utilities.networking import SubnetReservation as S; print(S.LOCK.get())"
     output = subprocess.check_output([sys.executable, "-c", code], env=environment)
     assert output.decode().strip() == str(tmp_path / "lock")

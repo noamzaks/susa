@@ -6,6 +6,8 @@ from collections.abc import Mapping, Sequence
 
 from typing_extensions import Self, override
 
+from susa.core.serializable import JSON, Serializable
+
 
 def node(
     tag: str,
@@ -43,7 +45,7 @@ def put(parent: ET.Element, element: ET.Element) -> None:
     add(parent, element)
 
 
-class LVModel:
+class LVModel(Serializable):
     element: ET.Element
 
     def build(self) -> str:
@@ -60,6 +62,15 @@ class LVModel:
     @classmethod
     def parse(cls, xml: str | bytes) -> Self:
         return cls.of(ET.fromstring(xml))
+
+    @override
+    def __getstate__(self) -> JSON:
+        return {"xml": self.build()}
+
+    @override
+    def __setstate__(self, state: JSON) -> None:
+        assert isinstance(state, dict) and isinstance(state["xml"], str)
+        self.element = ET.fromstring(state["xml"])
 
     @override
     def __eq__(self, other: object) -> bool:

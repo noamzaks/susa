@@ -16,3 +16,6 @@ build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-name = ["susa.core", "susa.utilities"]
+
+[project.entry-points.pytest11]
+susa = "susa.utilities.pytest_plugin"

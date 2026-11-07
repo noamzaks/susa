@@ -32,7 +32,7 @@ from susa.utilities.generic import GIGA, wait_until
 from susa.utilities.networking import SubnetReservation, pings
 
 IMAGE = Path(f"/machines/debian_{host_arch()}.qcow2")
-ENVIRONMENT = ("SUSA_SESSION", "LIBVIRT_DEFAULT_URI", "SUSA_SUBNETS_LOCK")
+ENVIRONMENT = ("SUSA_HOST", "SUSA_URI", "SUSA_SUBNETS_LOCK")
 
 
 def needs_podman() -> None:

@@ -34,14 +34,17 @@ around libvirt/QEMU virtual machines of many architectures.
 - **Let the libraries do it.** Prefer what libvirt (or another library) already provides. SUSA doesn't implement what
   no library does, and doesn't reach behind its backend's back.
 - **Plain and simple.** Each function does one simple thing. Use libraries through their high-level APIs (e.g. pydantic
-  models, not core schemas). No machinery nothing needs (e.g. serialization, cross-process coordination, sharing a
+  models, not core schemas). No machinery nothing needs (e.g. cross-process coordination, sharing a
   resource between concurrent users).
 - **Capabilities are mixins** (`Snapshottable`, `Powerable`, ...), checked with `isinstance`.
 - **Contracts stay loose.** Core types are ABCs with abstract properties; don't collapse them into concrete classes.
 - **Defaults are `Variable`s** (e.g. `HOST`, which commands run on, taken when an object is made, and `URI`, taken when
-  virsh runs), and set for a `with` block. Their initial values may come from the environment (e.g. `HOST` from the `host` of the
-  `SUSA_SESSION` recipe, see `susa.utilities.environment`), which is how `LibvirtContainer` passes its defaults on to
-  processes started meanwhile; code otherwise never reads `os.environ`.
+  virsh runs), and set for a `with` block. `EnvironmentVariable`s (e.g. `HOST` in `SUSA_HOST`) are also kept in the
+  environment while they're set (as JSON, `Serializable` values by `serialize`), and start from it, which is how
+  `LibvirtContainer` passes its defaults on to processes started meanwhile; code otherwise never reads `os.environ`.
+- **State.** `Serializable` objects (`__getstate__`/`__setstate__` to JSON) pass to other processes, by pickle or
+  `serialize`. `Saveable` resources (e.g. `LVMachine`, with its memory and volumes) save what they're in beyond that,
+  which `save` and `SavedResources` (e.g. the pytest plugin's `--save-failed`) keep and bring back.
 - **Resources.** Anything with a lifetime is a `Resource` (`create()`/`destroy()`, a context manager). Factory methods
   return resources that aren't created yet.
 - **Models are values, entities are live.** Models build libvirt XML with chainable builders returning `Self`, and
