@@ -13,7 +13,7 @@ from susa.core.resource import Resource
 from susa.core.stream import FileStream, InputOutputStream, InputStream, OutputStream
 from susa.core.variable import Variable
 from susa.utilities.environment import default
-from susa.utilities.generic import Deadline
+from susa.utilities.generic import Deadline, Guard
 
 
 class FileTransferrer(ABC):
@@ -141,10 +141,10 @@ class HostAsyncCommandRunner(AsyncCommandRunner):
         return HostAsyncCommand(command)
 
 
-# Killing it kills the shell, so the commands it didn't replace itself with (e.g. in `a; b`) keep running.
 class HostAsyncCommand(AsyncCommand):
     def __init__(self, command: str) -> None:
         logging.debug("Running %.200r on this system", command)
+        # In a session of its own, so that killing it kills what it started too.
         self.process = subprocess.Popen(
             command,
             shell=True,
@@ -152,7 +152,10 @@ class HostAsyncCommand(AsyncCommand):
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            start_new_session=True,
         )
+        # Which this process' end kills too, and its own end what it left behind.
+        self.guard = Guard(f"kill -KILL -{self.process.pid} 2> /dev/null")
         assert self.process.stdin and self.process.stdout and self.process.stderr
         self._stdin = FileStream(self.process.stdin)
         self._stdout = FileStream(self.process.stdout)
@@ -175,20 +178,25 @@ class HostAsyncCommand(AsyncCommand):
 
     @override
     def poll(self) -> int | None:
-        return self.process.poll()
+        exit_code = self.process.poll()
+        if exit_code is not None:
+            self.guard.release()
+        return exit_code
 
     @override
     def wait(self, timeout: float | None = None) -> int:
         try:
-            return self.process.wait(timeout)
+            exit_code = self.process.wait(timeout)
         except subprocess.TimeoutExpired as e:
             raise TimeoutError(
                 f"{self.process.args!r} didn't exit within {timeout} seconds"
             ) from e
+        self.guard.release()
+        return exit_code
 
     @override
     def kill(self) -> None:
-        self.process.kill()
+        self.guard.release()
 
 
 # What commands run on (by default) when they run "on the host", e.g. clients of remote shells or ping.

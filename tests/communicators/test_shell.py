@@ -90,11 +90,17 @@ def test_run(unix: UnixCommunicator) -> None:
     assert (error.value.returncode, error.value.stderr) == (3, b"oops\n")
 
 
+# Of its own, unlike other tests' (e.g. of the other shell, in parallel).
+def sleep() -> str:
+    return f"sleep {random.randrange(10**6, 10**7)}"
+
+
 def test_run_timeout(shell: LocalShell, unix: UnixCommunicator) -> None:
+    sleeping = sleep()
     with pytest.raises(TimeoutError):
-        unix.run("exec sleep 3602", timeout=0.5)
-    shell.run("pkill -f '^sleep 3602$'")
-    assert_gone(shell, "sleep 3602")
+        unix.run(f"exec {sleeping}", timeout=0.5)
+    shell.run(f"pkill -f '^{sleeping}$'")
+    assert_gone(shell, sleeping)
 
 
 def test_start(unix: UnixCommunicator) -> None:
@@ -116,12 +122,13 @@ def test_start_read_size(unix: UnixCommunicator) -> None:
 
 
 def test_start_kill(shell: LocalShell, unix: UnixCommunicator) -> None:
-    command = unix.start("exec sleep 3601")
+    sleeping = sleep()
+    command = unix.start(f"exec {sleeping}")
     with pytest.raises(TimeoutError):
         command.wait(timeout=0.5)
     command.kill()
     assert command.wait(timeout=5) == 128 + 15
-    assert_gone(shell, "sleep 3601")
+    assert_gone(shell, sleeping)
 
 
 def test_start_stdin(unix: UnixCommunicator) -> None:

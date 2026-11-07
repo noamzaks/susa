@@ -319,6 +319,18 @@ def test_start(machine: LVMachine, kind: str) -> None:
         assert command.stderr.read() == b"done\n"
 
 
+# What it started stops when its shell disconnects.
+@pytest.mark.parametrize("kind", SHELLS)
+def test_disconnect(machine: LVMachine, kind: str) -> None:
+    # Unlike its own command line.
+    sleeping = "pgrep -f '[s]leep 3606'"
+    with unix(machine, kind) as u:
+        u.start("sleep 3606; true")
+        wait_until(lambda: u.communicator.run(sleeping).returncode == 0, 10)
+    with shell(machine, "ssh") as ssh:
+        wait_until(lambda: ssh.run(sleeping).returncode == 1, 10)
+
+
 @pytest.mark.parametrize("kind", TRANSFERRERS)
 def test_transfer(machine: LVMachine, kind: str, tmp_path: Path) -> None:
     data = [random.randbytes(5000) for _ in range(3)]

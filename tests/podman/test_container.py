@@ -28,17 +28,21 @@ from susa.libvirt import (
 )
 from susa.libvirt.arch import host_arch
 from susa.podman.container import LibvirtContainer
-from susa.utilities.generic import GIGA
+from susa.utilities.generic import GIGA, wait_until
 from susa.utilities.networking import SubnetReservation, pings
 
 IMAGE = Path(f"/machines/debian_{host_arch()}.qcow2")
 ENVIRONMENT = ("SUSA_SESSION", "LIBVIRT_DEFAULT_URI", "SUSA_SUBNETS_LOCK")
 
 
-@pytest.fixture
-def container() -> Iterator[LibvirtContainer]:
+def needs_podman() -> None:
     if shutil.which("podman") is None or not IMAGE.exists():
         pytest.skip(f"Needs podman and {IMAGE}")
+
+
+@pytest.fixture
+def container() -> Iterator[LibvirtContainer]:
+    needs_podman()
     defaults = (HOST.get(), URI.get(), SubnetReservation.LOCK.get())
     environment = [os.environ.get(name) for name in ENVIRONMENT]
     container = LibvirtContainer([str(IMAGE.parent)])
@@ -99,3 +103,39 @@ def test_container(container: LibvirtContainer) -> None:
                 assert None not in pings(machine.ip, 2, timeout=5, interval=0.5)
                 time.sleep(1)
             assert sum(ICMP in packet for packet in sniffer.packets()) >= 4
+
+
+def sleeping(seconds: int) -> bool:
+    command = ["pgrep", "-fx", f"sleep {seconds}"]
+    return subprocess.run(command, check=False).returncode == 0
+
+
+# Commands run in its PID namespace, so they stop with it.
+def test_stop() -> None:
+    needs_podman()
+    with LibvirtContainer([str(IMAGE.parent)]):
+        command = HOST.get().start("sleep 3605; true")
+        time.sleep(0.5)
+        assert sleeping(3605)
+    assert command.wait(timeout=10) != 0
+    assert not sleeping(3605)
+
+
+# It's removed when this process ends, even when it's killed.
+def test_crash() -> None:
+    needs_podman()
+    code = f"""
+import os, signal
+from susa.podman.container import LibvirtContainer
+container = LibvirtContainer([{str(IMAGE.parent)!r}])
+container.create()
+print(container.name, container.directory, flush=True)
+os.kill(os.getpid(), signal.SIGKILL)
+"""
+    output = subprocess.run(
+        [sys.executable, "-c", code], check=False, capture_output=True, text=True
+    )
+    name, directory = output.stdout.split()
+    exists = ["podman", "container", "exists", name]
+    wait_until(lambda: subprocess.run(exists, check=False).returncode == 1, 60)
+    wait_until(lambda: not Path(directory).exists(), 10)
