@@ -21,7 +21,6 @@ class Variable(Generic[T]):
     @overload
     def __init__(self, *, default_factory: Callable[[], T]) -> None: ...
 
-    # The default factory is called once, when the default is first needed.
     def __init__(
         self, default: Any = None, *, default_factory: Callable[[], T] | None = None
     ) -> None:
@@ -40,8 +39,6 @@ class Variable(Generic[T]):
             self._values.pop()
 
 
-# Kept in an environment variable too while it's set, so processes started meanwhile start with its value. Its values
-# are strings, `None` or serializable (as JSON).
 class EnvironmentVariable(Variable[T]):
     @overload
     def __init__(self, name: str, default: T) -> None: ...

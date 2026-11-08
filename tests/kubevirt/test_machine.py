@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import shutil
+import signal
 import subprocess
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -26,7 +28,6 @@ from susa.kubevirt.emulation import aarch64_without_kvm_script
 from susa.utilities.generic import GIGA, wait_until
 from susa.utilities.networking import ping
 
-# A DataVolume of /machines/debian_aarch64.qcow2 (made with `virtctl image-upload`).
 GOLDEN = "debian"
 BOOT_TIMEOUT = 600
 STORAGE_CLASS = "csi-hostpath-sc"
@@ -176,6 +177,35 @@ def test_network_removes_its_bridge() -> None:
     with KVNodePod() as pod:
         pod.wait_until_ready()
         assert model.get_name() not in pod.run("ip", "-o", "link")
+
+
+CRASH = """
+import os, signal
+from susa.kubevirt import KVNetwork, KVNetworkModel
+
+network = KVNetwork(KVNetworkModel())
+network.create()
+print(network.name, flush=True)
+os.kill(os.getpid(), signal.SIGKILL)
+"""
+
+
+def test_network_crash() -> None:
+    def pods() -> str:
+        return kubectl("get", "pods", "-o=name")
+
+    before = pods()
+    result = subprocess.run(
+        [sys.executable, "-c", CRASH], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == -signal.SIGKILL, result.stderr
+    name = result.stdout.strip()
+    attachments = ["get", "network-attachment-definitions", "-o=name"]
+    wait_until(lambda: name not in kubectl(*attachments), 120)
+    wait_until(lambda: pods() == before, 120)
+    with KVNodePod() as pod:
+        pod.wait_until_ready()
+        assert name not in pod.run("ip", "-o", "link")
 
 
 def test_network_refuses_an_address_on_the_node() -> None:

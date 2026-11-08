@@ -31,7 +31,6 @@ class Sniffer(Resource, OutputStream):
     def pcap(self) -> PcapReader:
         from scapy.utils import PcapReader
 
-        # scapy accepts file objects, but only annotates `str` where mypy looks.
         return PcapReader(self.file())  # type: ignore
 
     def next_packet(self) -> Packet:
@@ -41,7 +40,6 @@ class Sniffer(Resource, OutputStream):
         return list(self.pcap)
 
 
-# A command that writes the capture to its output.
 class CommandSniffer(Sniffer):
     def __init__(self, command: str, host: AsyncCommandRunner | None = None) -> None:
         self.capture_command = command

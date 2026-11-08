@@ -19,14 +19,11 @@ Prelude: TypeAlias = Callable[[InputOutputStream], None]
 
 
 class ShellCommunicator(CommandRunner):
-    # Before the setup turns output translation off, newlines come out as "\r\n".
     EXIT = re.compile(rb"SUSA-EXIT-(\d+)\r?\n")
     MARK_EXIT = b"echo SUSA-EXIT-$?"
     READY = "SUSA-READY"
     HUNG_UP = b"SUSA-HUNG-UP\n"
     HANG_UP = b"echo SUSA-HUNG-UP; kill -HUP 0"
-    # No line editing (which may reset the terminal's settings), job notifications, echo, output translation, bells
-    # (when input fills up) or prompts, so the output of commands is exactly what they wrote.
     SETUP = b"set +m +o emacs +o vi; stty -echo -opost -imaxbel; PS1=''; PS2=''; PROMPT_COMMAND=''"
     CONNECT_TIMEOUT = 600
     SETUP_TIMEOUT = 60
@@ -44,7 +41,6 @@ class ShellCommunicator(CommandRunner):
     @abstractmethod
     def open_stream(self) -> InputOutputStream: ...
 
-    # The machine may still be booting.
     @override
     def create(self) -> None:
         deadline = Deadline(ShellCommunicator.CONNECT_TIMEOUT)
@@ -52,7 +48,6 @@ class ShellCommunicator(CommandRunner):
             logging.debug("Connecting to the shell")
             self.stream = self.open_stream()
             try:
-                # Interrupting a client or a shell that's starting may kill it.
                 interrupt = False
                 while not self.attach(interrupt):
                     deadline.test("The shell didn't become ready")
@@ -64,6 +59,10 @@ class ShellCommunicator(CommandRunner):
                 if deadline.passed():
                     raise
                 time.sleep(ShellCommunicator.RECONNECT_INTERVAL)
+            except BaseException:
+                self.stream.close()
+                self.stream = None
+                raise
 
     def attach(self, interrupt: bool) -> bool:
         assert self.stream is not None
@@ -78,13 +77,10 @@ class ShellCommunicator(CommandRunner):
                 self.stream.wait_until_quiet(
                     self.quiet_time, ShellCommunicator.SETUP_TIMEOUT
                 )
-            # Programs the shell starts with may discard part of what's typed (e.g. FreeBSD's resizewin), and what's
-            # left of the setup could start one (e.g. `vi`), unlike what's left of an exit marker.
             self.stream.write(ShellCommunicator.MARK_EXIT + ShellCommunicator.ENTER)
             self.stream.read_until(
                 ShellCommunicator.EXIT, ShellCommunicator.SETUP_ATTEMPT_TIMEOUT
             )
-            # One line, since turning line editing off discards whatever it already read.
             self.stream.write(
                 ShellCommunicator.SETUP
                 + b"; "
@@ -97,7 +93,6 @@ class ShellCommunicator(CommandRunner):
             self.stream.wait_until_quiet(
                 ShellCommunicator.RECOVERY_QUIET_TIME, ShellCommunicator.SETUP_TIMEOUT
             )
-            # Part of the setup may have been discarded with the marker still sent.
             probe = self.run(
                 f"echo {ShellCommunicator.READY}",
                 ShellCommunicator.SETUP_ATTEMPT_TIMEOUT,
@@ -109,9 +104,6 @@ class ShellCommunicator(CommandRunner):
     @override
     def destroy(self) -> None:
         assert self.stream is not None
-        # Hangs up its process group, the shell and what it started (as job control is off), like a terminal's hangup
-        # would (which doesn't reach them on serial consoles, or under shells that aren't the session's leader). Once
-        # the shell read it (the client may lose what it didn't pass on yet), unless the client is gone already.
         try:
             with contextlib.suppress(BrokenPipeError):
                 self.stream.write(ShellCommunicator.HANG_UP + ShellCommunicator.ENTER)
@@ -137,7 +129,6 @@ class ShellCommunicator(CommandRunner):
         try:
             output = self.stream.read_until(ShellCommunicator.EXIT, timeout)
         except TimeoutError:
-            # Interrupting usually also discards the pending marker line, so send it again.
             self.stream.write(
                 ShellCommunicator.INTERRUPT
                 + ShellCommunicator.MARK_EXIT

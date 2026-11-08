@@ -11,17 +11,17 @@ from collections.abc import Generator, Iterator
 import pytest
 
 from susa.communicators.container import ContainerCommunicator
+from susa.core.communicator import HOST
+from susa.utilities.generic import wait_until
 
 NET = os.readlink("/proc/self/ns/net").encode()
 
 
-# The init of user, network and PID namespaces of its own, like a rootless container's.
 @contextlib.contextmanager
 def container() -> Generator[int, None, None]:
     process = subprocess.Popen(
         ["unshare", "--user", "--net", "--pid", "--fork", "sleep", "infinity"]
     )
-    # Until `unshare` forked the init, which replaced itself with `sleep`.
     time.sleep(0.5)
     init = subprocess.run(
         ["pgrep", "-P", str(process.pid)], check=True, capture_output=True
@@ -38,7 +38,6 @@ def target() -> Iterator[int]:
 
 
 def sleeping(seconds: int) -> bool:
-    time.sleep(0.5)
     command = ["pgrep", "-fx", f"sleep {seconds}"]
     return subprocess.run(command, check=False).returncode == 0
 
@@ -62,25 +61,22 @@ def test_start(target: int) -> None:
     assert command.stdout.read_all(timeout=10) == b"a\x00\xff\n"
 
 
-# They're this process' children, so they stop.
 def test_kill(target: int) -> None:
     command = ContainerCommunicator(target).start("exec sleep 3603")
     command.kill()
     assert command.wait(timeout=10) == -9
-    assert not sleeping(3603)
+    wait_until(lambda: not sleeping(3603), 10)
 
 
-# They're in its PID namespace, so they stop with its init.
 def test_stop() -> None:
     with container() as init:
         command = ContainerCommunicator(init).start("sleep 3604; true")
-        assert sleeping(3604)
+        wait_until(lambda: sleeping(3604), 10)
         os.kill(init, signal.SIGKILL)
-        assert not sleeping(3604)
+        wait_until(lambda: not sleeping(3604), 10)
         assert command.wait(timeout=10) != 0
 
 
-# They stop when this process ends, even when it's killed.
 def test_crash(target: int) -> None:
     code = f"""
 import os, signal, time
@@ -90,4 +86,11 @@ time.sleep(0.5)
 os.kill(os.getpid(), signal.SIGKILL)
 """
     subprocess.run([sys.executable, "-c", code], check=False)
-    assert not sleeping(3609)
+    wait_until(lambda: not sleeping(3609), 10)
+
+
+def test_host_in_process() -> None:
+    code = "from susa.core.communicator import HOST; print(vars(HOST.get()))"
+    with HOST.set(ContainerCommunicator(1, ["net"])):
+        output = subprocess.check_output([sys.executable, "-c", code], text=True)
+    assert output == "{'pid': 1, 'namespaces': ['net']}\n"

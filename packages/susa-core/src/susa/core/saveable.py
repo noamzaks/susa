@@ -9,18 +9,14 @@ from susa.core.resource import Resource
 from susa.core.serializable import JSON, Serializable, deserialize, serialize
 
 
-# What has a state beyond what it's made of (e.g. a machine's memory and what it wrote to its disks).
 class Saveable(Resource):
-    # Leaves it as it was.
     @abstractmethod
     def save(self) -> JSON: ...
 
-    # Creates it in the saved state.
     @abstractmethod
     def restore(self, state: JSON) -> None: ...
 
 
-# Those of the resources that are serializable, as they are now (in order, so that they're created again in it).
 def save(resources: Sequence[Resource]) -> JSON:
     return [
         {
@@ -32,7 +28,6 @@ def save(resources: Sequence[Resource]) -> JSON:
     ]
 
 
-# Resources `save` saved, created again as they were. They keep their names, so the saved ones must be gone first.
 class SavedResources(Resource):
     def __init__(self, saved: JSON) -> None:
         self.saved = saved

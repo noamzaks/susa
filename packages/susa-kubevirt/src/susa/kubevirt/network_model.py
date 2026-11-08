@@ -23,14 +23,12 @@ class KVNetworkModel(KVModel):
 
         return super().name(name)
 
-    # The node's address on the network, through which it reaches the machines.
     def ip(self, ip: str, prefix: int = 24) -> Self:
         self.host_ip = ip
         self.prefix_length = prefix
 
         return self
 
-    # A definition of the same bridge, whose only address KubeVirt gives the guest over DHCP.
     def attachment(self, name: str, ip: str) -> Manifest:
         address = {"address": f"{ip}/{self.prefix_length}"}
         if self.host_ip is not None:

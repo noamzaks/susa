@@ -186,7 +186,6 @@ def resolve_value(value: Any, objects: Mapping[str, Any]) -> Any:
 
 
 class Recipe(pydantic.RootModel[dict[str, Any]]):
-    # Built at runtime from the classes recipes can make.
     if TYPE_CHECKING:
         root: dict[str, Any]
     else:

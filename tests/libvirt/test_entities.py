@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import pickle
+import signal
 import subprocess
+import sys
 from typing import Any
 
 import pytest
@@ -28,7 +30,7 @@ from susa.libvirt.network import LVNetwork
 from susa.libvirt.network_model import LVNetworkModel
 from susa.libvirt.volume import LVVolume
 from susa.libvirt.volume_model import LVVolumeModel
-from susa.utilities.generic import GIGA
+from susa.utilities.generic import GIGA, wait_until
 
 MAC = "52:54:00:12:34:56"
 
@@ -117,7 +119,6 @@ def test_machine_interfaces() -> None:
 
 
 def test_interface_without_reservation() -> None:
-    # The interface is connected to the network, but the network has no DHCP to reserve an IP with.
     network = LVNetworkModel().default().ip("10.0.0.1", dhcp=False)
     interface = LVInterfaceModel(mac=MAC)
     network.interface(interface)
@@ -134,7 +135,6 @@ def test_machine_is_persistent_until_destroyed() -> None:
         name = machine.name
         machine.power_off()
         assert not machine.is_powered_on
-        # Still defined, so it can be powered on again.
         machine.power_on()
         assert machine.is_powered_on
     with pytest.raises(subprocess.CalledProcessError):
@@ -220,3 +220,47 @@ def test_pickle() -> None:
     entities: list[LVEntity[Any]] = [network, volume, machine, snapshot]
     for entity, copy in zip(entities, pickle.loads(pickle.dumps(entities))):
         assert copy.model == entity.model
+
+
+def test_machine_create_fails() -> None:
+    machine = LVMachine(domain().volume(LVVolumeModel()))
+    with pytest.raises(subprocess.CalledProcessError):
+        machine.create()
+    assert machine.name not in virsh("list", "--all", "--name")
+
+
+CRASH = """
+import os, signal
+from susa.libvirt import LVMachine, LVMachineModel, LVNetwork, LVNetworkModel, LVVolume, LVVolumeModel
+from susa.utilities.generic import GIGA
+
+network = LVNetwork(LVNetworkModel().default().ip("10.0.0.1"))
+network.create()
+volume = LVVolumeModel().capacity(GIGA)
+volume_entity = LVVolume(volume)
+volume_entity.create()
+model = LVMachineModel().arch("x86_64").default().memory(GIGA // 4).volume(volume)
+machine = LVMachine(model)
+machine.create()
+snapshot = machine.snapshot()
+snapshot.create()
+print(network.name, volume.get_name(), machine.name, flush=True)
+os.kill(os.getpid(), signal.SIGKILL)
+"""
+
+
+def test_crash() -> None:
+    result = subprocess.run(
+        [sys.executable, "-c", CRASH], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == -signal.SIGKILL, result.stderr
+    names = result.stdout.split()
+    assert len(names) == 3
+
+    def listed() -> str:
+        networks = virsh("net-list", "--all", "--name")
+        return (
+            networks + virsh("vol-list", "default") + virsh("list", "--all", "--name")
+        )
+
+    wait_until(lambda: not any(name in listed() for name in names), 60)

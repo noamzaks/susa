@@ -8,7 +8,7 @@ from typing_extensions import override
 from susa.core.communicator import AsyncCommandRunner
 from susa.core.interface import BasicInterface, Interface
 from susa.core.network import CommandSniffer, Network, Sniffable
-from susa.libvirt._virsh import virsh, virsh_xml
+from susa.libvirt._virsh import virsh, virsh_guarded, virsh_xml
 from susa.libvirt.entity import LVEntity
 from susa.libvirt.network_model import LVNetworkModel
 
@@ -25,16 +25,17 @@ class LVNetwork(LVEntity[LVNetworkModel], Network, Sniffable):
     @property
     @override
     def interfaces(self) -> list[Interface]:
-        # libvirt doesn't record which interfaces are connected to a network, only the IPs reserved for them.
         return [BasicInterface(m, ip) for m, ip in self.model.get_hosts().items()]
 
     @override
     def create(self) -> None:
-        virsh_xml(self._xml(), "net-create")
+        with virsh_guarded(["net-destroy", self.name]) as self.guard:
+            virsh_xml(self._xml(), "net-create")
 
     @override
     def destroy(self) -> None:
         virsh("net-destroy", self.name)
+        self.guard.cancel()
 
     @override
     def sniffer(self) -> LVSniffer:

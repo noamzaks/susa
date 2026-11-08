@@ -131,7 +131,6 @@ class Screenshottable(ABC):
 class Serial(Resource, InputOutputStream): ...
 
 
-# Of a console client, which needs a terminal, so `script` gives it one.
 class CommandSerial(AsyncCommandStream, Serial):
     def __init__(
         self, command: Sequence[str], host: AsyncCommandRunner | None = None

@@ -55,7 +55,6 @@ def container() -> Iterator[LibvirtContainer]:
     assert subprocess.run(exists, check=False).returncode == 1
 
 
-# Of processes started meanwhile, too.
 def test_defaults(container: LibvirtContainer) -> None:
     host = HOST.get()
     assert isinstance(host, ContainerCommunicator)
@@ -110,7 +109,6 @@ def sleeping(seconds: int) -> bool:
     return subprocess.run(command, check=False).returncode == 0
 
 
-# Commands run in its PID namespace, so they stop with it.
 def test_stop() -> None:
     needs_podman()
     with LibvirtContainer([str(IMAGE.parent)]):
@@ -121,7 +119,6 @@ def test_stop() -> None:
     assert not sleeping(3605)
 
 
-# It's removed when this process ends, even when it's killed.
 def test_crash() -> None:
     needs_podman()
     code = f"""
@@ -139,3 +136,14 @@ os.kill(os.getpid(), signal.SIGKILL)
     exists = ["podman", "container", "exists", name]
     wait_until(lambda: subprocess.run(exists, check=False).returncode == 1, 60)
     wait_until(lambda: not Path(directory).exists(), 10)
+
+
+def test_create_fails() -> None:
+    needs_podman()
+    defaults = (HOST.get(), LVURI.get(), SubnetReservation.LOCK.get())
+    container = LibvirtContainer(start_timeout=0)
+    with pytest.raises(TimeoutError):
+        container.create()
+    assert (HOST.get(), LVURI.get(), SubnetReservation.LOCK.get()) == defaults
+    exists = ["podman", "container", "exists", container.name]
+    assert subprocess.run(exists, check=False).returncode == 1

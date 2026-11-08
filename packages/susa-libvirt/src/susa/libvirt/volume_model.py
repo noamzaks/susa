@@ -19,7 +19,6 @@ class LVVolumeModel(LVModel):
                 node("target", elements=[node("format", attrs={"type": "qcow2"})]),
             ],
         )
-        # The volume's XML doesn't say which pool it's in.
         self.pool_name = "default"
 
     def name(self, name: str) -> Self:
@@ -37,7 +36,6 @@ class LVVolumeModel(LVModel):
 
         return self
 
-    # Of the file libvirt creates for it.
     def owner(self, uid: int, gid: int) -> Self:
         permissions = node(
             "permissions",
@@ -61,12 +59,10 @@ class LVVolumeModel(LVModel):
 
         return self
 
-    # Its file is owned by whom commands on the host run as, so they can open it (e.g. to commit it).
     def default(self, host: CommandRunner | None = None) -> Self:
         host = host or HOST.get()
         return self.owner(int(host.check("id -u")), int(host.check("id -g")))
 
-    # Its pool too, which its XML doesn't say.
     @override
     def __getstate__(self) -> JSON:
         state = super().__getstate__()

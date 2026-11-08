@@ -108,7 +108,6 @@ class AsyncCommandRunner(CommandRunner):
         try:
             exit_code = async_command.wait(deadline.remaining())
         except TimeoutError:
-            # Which also ends its output.
             async_command.kill()
             raise
         result = CompletedProcess(
@@ -152,7 +151,6 @@ class HostAsyncCommandRunner(AsyncCommandRunner, Serializable):
 class HostAsyncCommand(AsyncCommand):
     def __init__(self, command: str) -> None:
         logging.debug("Running %.200r on this system", command)
-        # In a session of its own, so that killing it kills what it started too.
         self.process = subprocess.Popen(
             command,
             shell=True,
@@ -162,7 +160,6 @@ class HostAsyncCommand(AsyncCommand):
             stderr=subprocess.PIPE,
             start_new_session=True,
         )
-        # Which this process' end kills too, and its own end what it left behind.
         self.guard = Guard(f"kill -KILL -{self.process.pid} 2> /dev/null")
         assert self.process.stdin and self.process.stdout and self.process.stderr
         self._stdin = FileStream(self.process.stdin)
@@ -207,7 +204,6 @@ class HostAsyncCommand(AsyncCommand):
         self.guard.release()
 
 
-# What commands run on (by default) when they run "on the host", e.g. clients of remote shells or ping.
 HOST = EnvironmentVariable[AsyncCommandRunner](
     "SUSA_HOST", default_factory=HostAsyncCommandRunner
 )

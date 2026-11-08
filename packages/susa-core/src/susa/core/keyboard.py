@@ -7,7 +7,6 @@ from enum import Enum
 
 
 class Key(Enum):
-    # Values are Linux input event codes.
     ESCAPE = 1
     DIGIT_1 = 2
     DIGIT_2 = 3
@@ -113,7 +112,6 @@ class Key(Enum):
     RIGHT_META = 126
     MENU = 127
 
-    # On a US keyboard.
     @staticmethod
     def from_chr(c: str) -> list[Key]:
         keys = {

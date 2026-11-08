@@ -12,7 +12,6 @@ M = TypeVar("M", bound=LVModel)
 
 
 class LVEntity(Serializable, Generic[M]):
-    # Subclasses redeclare it with their model's class, which recipes would otherwise see as `M`.
     def __init__(self, model: M) -> None:
         self.model = model
 

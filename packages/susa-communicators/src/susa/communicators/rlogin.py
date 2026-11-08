@@ -18,7 +18,6 @@ class RloginCommunicator(ShellCommunicator):
         password: str,
         host: AsyncCommandRunner | None = None,
     ) -> None:
-        # rlogind gets the username from the client, and asks only for the password.
         super().__init__(Login(password))
         self.ip = ip
         self.username = username
@@ -26,6 +25,5 @@ class RloginCommunicator(ShellCommunicator):
 
     @override
     def open_stream(self) -> InputOutputStream:
-        # 8-bit clean, with no escape character (which would otherwise be intercepted in the data).
         command = ["rlogin", "-8", "-E", "-l", self.username, self.ip]
         return AsyncCommandStream(self.host.start(shlex.join(command)))

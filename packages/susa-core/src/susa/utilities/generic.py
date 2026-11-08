@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import contextlib
 import logging
+import os
 import random
 import shlex
 import string
 import subprocess
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
+from pathlib import Path
 
 GIGA = 1 << 30
 
@@ -44,21 +47,50 @@ def wait_until(
         time.sleep(interval)
 
 
-# Runs a command on this system once it's released, or once this process ends however it does (as the pipe the command
-# waits on closes then).
 class Guard:
     def __init__(self, command: str) -> None:
-        # In a session of its own, so that what stops this process' group (e.g. Ctrl-C) doesn't stop it.
+        script = f"read _ || {{ {command}\n}} > /dev/null"
         self.process = subprocess.Popen(
-            ["sh", "-c", f"read _; {command}"],
+            ["sh", "-c", f"exec 3<&0; sh -c {shlex.quote(script)} <&3 3<&- &"],
             stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
             start_new_session=True,
         )
+        self.process.wait()
 
     def release(self) -> None:
-        assert self.process.stdin is not None
-        self.process.stdin.close()
-        self.process.wait()
+        self._close(b"")
+
+    def cancel(self) -> None:
+        self._close(b"\n")
+
+    def _close(self, data: bytes) -> None:
+        assert self.process.stdin is not None and self.process.stdout is not None
+        if not self.process.stdin.closed:
+            self.process.stdin.write(data)
+            self.process.stdin.close()
+        self.process.stdout.read()
+
+
+@contextlib.contextmanager
+def guarded(command: str) -> Generator[Guard, None, None]:
+    guard = Guard(command)
+    try:
+        yield guard
+    except BaseException:
+        guard.release()
+        raise
+
+
+@contextlib.contextmanager
+def memory_file(data: bytes = b"") -> Generator[Path, None, None]:
+    fd = os.memfd_create("susa")
+    try:
+        path = Path(f"/proc/{os.getpid()}/fd/{fd}")
+        path.write_bytes(data)
+        yield path
+    finally:
+        os.close(fd)
 
 
 def run(

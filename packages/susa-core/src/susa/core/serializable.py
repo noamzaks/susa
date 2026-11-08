@@ -7,8 +7,6 @@ from typing import TypeAlias
 JSON: TypeAlias = "None | bool | int | float | str | list[JSON] | dict[str, JSON]"
 
 
-# What can be passed to other processes, as pickle does (or `serialize`, as JSON): by its state, set on an instance that
-# wasn't initialized.
 class Serializable(ABC):
     @abstractmethod
     def __getstate__(self) -> JSON: ...

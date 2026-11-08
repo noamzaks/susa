@@ -8,7 +8,7 @@ from typing_extensions import override
 
 from susa.core.interface import BasicInterface, Interface
 from susa.core.network import CommandSniffer, Network, Sniffable
-from susa.kubevirt._kubectl import create, delete, kubectl
+from susa.kubevirt._kubectl import create, delete, deletion, kubectl, kubectl_guarded
 from susa.kubevirt.network_model import KVNetworkModel
 from susa.kubevirt.node_pod import KVNodePod
 
@@ -47,18 +47,19 @@ class KVNetwork(Network, Sniffable):
                     result.append(BasicInterface(interface["mac"], ips[attachment]))
         return result
 
-    # CNI would make the bridge only for the first machine, and never remove it.
     @override
     def create(self) -> None:
-        with KVNodePod(self.timeout) as pod:
-            pod.wait_until_ready()
-            # Another bridge with this address (e.g. of a killed run) would take the route to the machines.
-            ip = self.model.host_ip
-            if ip is not None and f" {ip}/" in pod.run("ip", "-o", "address"):
-                raise RuntimeError(f"{ip} is already on the node")
-            pod.run("ip", "link", "add", self.name, "type", "bridge")
-            pod.run("ip", "link", "set", self.name, "up")
-        create(self.model.manifest)
+        attachment = deletion("network-attachment-definition", self.name)
+        bridge = KVNodePod.run_command(["ip", "link", "del", self.name])
+        with kubectl_guarded(attachment, bridge) as self.guard:
+            with KVNodePod(self.timeout) as pod:
+                pod.wait_until_ready()
+                ip = self.model.host_ip
+                if ip is not None and f" {ip}/" in pod.run("ip", "-o", "address"):
+                    raise RuntimeError(f"{ip} is already on the node")
+                pod.run("ip", "link", "add", self.name, "type", "bridge")
+                pod.run("ip", "link", "set", self.name, "up")
+            create(self.model.manifest)
 
     @override
     def destroy(self) -> None:
@@ -66,6 +67,7 @@ class KVNetwork(Network, Sniffable):
         with KVNodePod(self.timeout) as pod:
             pod.wait_until_ready()
             pod.run("ip", "link", "del", self.name)
+        self.guard.cancel()
 
     @override
     def sniffer(self) -> KVSniffer:

@@ -46,7 +46,6 @@ class KVMachineModel(KVModel):
 
         return self
 
-    # From a container image, as the node's files aren't available to the machine.
     def kernel(
         self,
         image: str,
@@ -74,17 +73,13 @@ class KVMachineModel(KVModel):
 
         return self
 
-    # Runs QEMU for another architecture, in a virt-launcher image that has it (see scripts/kubevirt-launcher).
     def emulate(self, arch: str) -> Self:
         return self.hook(EMULATIONS[arch].script)
 
-    # Through KubeVirt's cross-architecture support, which its CrossArchitectureVirtualization feature gate enables. Its name
-    # for the architecture (e.g. amd64).
     def cross_architecture(self, architecture: str) -> Self:
         self._spec["architecture"] = architecture
         return self.hook(cross_architecture_script())
 
-    # A script rewriting the domain as it's defined.
     def hook(self, script: str, image: str | None = None) -> Self:
         name = f"{self.get_name()}-hook{len(self.hooks)}"
         self.hooks[name] = script
@@ -138,7 +133,6 @@ class KVMachineModel(KVModel):
         name = f"disk{len(self._spec['volumes'])}"
         return self.disk(name, {"dataVolume": {"name": volume.get_name()}})
 
-    # With an IP, the machine has its own NetworkAttachmentDefinition of the network.
     def network(
         self,
         network: KVNetworkModel,

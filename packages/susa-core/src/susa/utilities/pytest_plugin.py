@@ -34,14 +34,11 @@ def pytest_runtest_makereport(
     return report
 
 
-# Called by a fixture's teardown, after its test ran. Saves to a JSON file named after the test, which
-# `SavedResources` creates again.
 @pytest.fixture
 def save_if_failed(
     request: pytest.FixtureRequest,
 ) -> Callable[[Sequence[Resource]], None]:
     def save_failed(resources: Sequence[Resource]) -> None:
-        # pytest doesn't annotate it.
         item = cast("pytest.Item", request.node)  # pyright: ignore
         directory: Path | None = request.config.getoption("save_failed")
         if directory is None or not item.stash.get(FAILED, False):

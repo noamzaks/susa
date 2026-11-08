@@ -19,7 +19,6 @@ from susa.utilities.generic import random_id
 
 class LVMachineModel(LVModel):
     QEMU_NAMESPACE = "http://libvirt.org/schemas/domain/qemu/1.0"
-    # The device names libvirt gives disks on each bus ("sd" for any other).
     BUS_PREFIXES: ClassVar[dict[str, str]] = {"ide": "hd", "fdc": "fd", "virtio": "vd"}
 
     def __init__(self, name: str | None = None) -> None:
@@ -70,7 +69,6 @@ class LVMachineModel(LVModel):
 
         return self
 
-    # libvirt picks the firmware by QEMU's firmware descriptors.
     def efi(self, secure_boot: bool = False) -> Self:
         os = child(self.element, "os")
         attribute(os, "firmware", "efi")
@@ -220,7 +218,6 @@ class LVMachineModel(LVModel):
             .default_qemu_args()
         )
 
-    # ElementTree resolves the prefix when parsing, and would make up another when serializing.
     @classmethod
     @override
     def parse(cls, xml: str | bytes) -> Self:
@@ -246,7 +243,6 @@ class LVMachineModel(LVModel):
     def get_interfaces(self) -> list[LVInterfaceModel]:
         return [LVInterfaceModel.of(i) for i in self._devices.findall("interface")]
 
-    # The pools and names of the volumes it has as disks.
     def get_volumes(self) -> list[tuple[str, str]]:
         sources = self._devices.findall("disk[@type='volume']/source")
         return [(s.attrib["pool"], s.attrib["volume"]) for s in sources]
@@ -276,7 +272,6 @@ class LVMachineModel(LVModel):
         devices = self._devices
         addresses = [*devices.findall("interface/address")]
         addresses += devices.findall("controller/address")
-        # libvirt writes them in hexadecimal.
         used = {int(a.attrib["slot"], 0) for a in addresses if "slot" in a.attrib}
         free = [slot for slot in slots if slot not in used]
         if not free:

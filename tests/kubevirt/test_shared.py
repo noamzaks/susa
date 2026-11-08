@@ -28,21 +28,16 @@ from tests.kubevirt.test_machine import (
     STORAGE_CLASS,
 )
 from tests.kubevirt.test_machine import golden as golden
-
-# Before the others, which leave a shell on the console that answers nothing.
-from tests.libvirt.test_machine import test_serial as test_serial  # isort: skip
-
 from tests.libvirt.test_machine import test_ping as test_ping
 from tests.libvirt.test_machine import test_power_cycle as test_power_cycle
 from tests.libvirt.test_machine import test_run as test_run
 from tests.libvirt.test_machine import test_screenshot as test_screenshot
+from tests.libvirt.test_machine import test_serial as test_serial
 from tests.libvirt.test_machine import test_sniff as test_sniff
 from tests.libvirt.test_machine import test_start as test_start
 from tests.libvirt.test_machine import test_transfer as test_transfer
 from tests.libvirt.test_machine import test_uname as test_uname
 
-# The images name the interface they had on libvirt, and rlogind refuses clients it can't resolve (with no DNS here). The
-# console goes back to a fresh getty, as there's no reverting to the snapshot for each test (that would reboot).
 PREPARE = f"""
 interface=$(ls /sys/class/net | grep -v lo)
 sed -i -E "s/^(allow-hotplug|iface) (ens|enp|eth)[^ ]*/\\1 $interface/" /etc/network/interfaces
@@ -51,11 +46,9 @@ echo {HOST_IP} node >> /etc/hosts
 sync
 (sleep 2; systemctl restart 'serial-getty@*') > /dev/null 2>&1 &
 """
-# `FROM scratch` images of /machines/debian-*-boot's files, as /kernel and /initrd.
 KERNELS = "localhost:5000/debian-kernel"
 
 
-# A DataVolume of the image for each architecture, and how to set a machine up for it.
 @dataclass(frozen=True)
 class Guest:
     golden: str
@@ -85,7 +78,6 @@ GUESTS = {
         cpu=1,
         cmdline="root=/dev/vda1 rw console=tty0 console=ttyAMA0 net.ifnames=0",
     ),
-    # Malta only routes interrupts to PCI slots 11 and 12.
     "mips": Guest(
         "debian-mips",
         emulate="mips",
@@ -144,14 +136,12 @@ def running(name: str, network: KVNetwork) -> Iterator[KVMachine]:
             yield machine
 
 
-# Power cycling only needs it to boot again.
 @pytest.fixture
 def machine(running: KVMachine) -> KVMachine:
     wait_until_booted(running, BOOT_TIMEOUT)
     return running
 
 
-# KubeVirt's cross-architecture support gives guests no video device.
 @pytest.fixture(autouse=True)
 def skip_screenshot(name: str, request: pytest.FixtureRequest) -> None:
     if request.function is test_screenshot and GUESTS[name].cross_architecture:

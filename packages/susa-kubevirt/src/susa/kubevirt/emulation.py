@@ -3,18 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-# Rewrites the domain KubeVirt made for the node's architecture, as an onDefineDomain hook, for QEMU to emulate another.
 @dataclass(frozen=True)
 class Emulation:
     arch: str
     machine: str
     emulator: str
     acpi: bool = False
-    # QEMU only has SMBIOS for some targets.
     smbios: bool = False
-    # Extra QEMU arguments libvirt has no XML for.
     qemu_args: tuple[str, ...] = ()
-    # More sed expressions for what else the target lacks.
     expressions: tuple[str, ...] = ()
 
     @property
@@ -42,8 +38,6 @@ class Emulation:
         return _sed(expressions)
 
 
-# Without KVM on Arm64, KubeVirt only allows the host-passthrough CPU, which libvirt only allows with KVM. The guest's kernel
-# needs GIC 3 under emulation.
 def aarch64_without_kvm_script() -> str:
     return _sed(
         [
@@ -53,7 +47,6 @@ def aarch64_without_kvm_script() -> str:
     )
 
 
-# KubeVirt's cross-architecture support asks for a CPU model libvirt doesn't know.
 def cross_architecture_script() -> str:
     return _sed(['s#<cpu[^>]*>.*</cpu>#<cpu mode="maximum"></cpu>#'])
 
@@ -70,7 +63,6 @@ EMULATIONS = {
         "qemu-system-i386",
         acpi=True,
         smbios=True,
-        # An i486-class CPU, since a true i386 crashes any kernel newer than ~2013.
         qemu_args=("-cpu", "qemu32,family=4"),
     ),
     "ppc64le": Emulation("ppc64le", "pseries", "qemu-system-ppc64"),
@@ -79,11 +71,8 @@ EMULATIONS = {
         "armv7l",
         "virt",
         "qemu-system-arm",
-        # A 32-bit guest can't reach the PCI window above 4 GB.
         qemu_args=("-machine", "virt,highmem=off"),
     ),
-    # Malta has no firmware or virtio in its kernel's early boot: its disk is IDE, and its kernels only have a framebuffer
-    # driver for Cirrus.
     "mips": Emulation(
         "mips",
         "malta",

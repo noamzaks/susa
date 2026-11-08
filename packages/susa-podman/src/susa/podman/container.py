@@ -13,13 +13,10 @@ from susa.communicators.container import ContainerCommunicator
 from susa.core.communicator import HOST
 from susa.core.resource import Resource
 from susa.libvirt._virsh import LVURI
-from susa.utilities.generic import Guard, random_id, wait_until
+from susa.utilities.generic import guarded, random_id, wait_until
 from susa.utilities.networking import SubnetReservation
 
 
-# libvirt in a rootless container (of the image, built if it's missing). Until it's destroyed, virsh defaults to it,
-# and commands that run on the host (e.g. ssh's) run in its network, where they reach its machines, also in processes
-# started meanwhile.
 class LibvirtContainer(Resource):
     CONTEXT = Path(__file__).parent / "image"
 
@@ -40,34 +37,15 @@ class LibvirtContainer(Resource):
     def create(self) -> None:
         assert self.directory is None
         self.directory = Path(tempfile.mkdtemp(prefix="susa-"))
-        # Removes it when it's destroyed, or when this process ends first.
         remove = ["podman", "rm", "--force", "--time=0", "--ignore", self.name]
         directory = shlex.quote(str(self.directory))
-        self.guard = Guard(f"{shlex.join(remove)} > /dev/null; rm -r {directory}")
-        socket = self.directory / "libvirt/virtqemud-sock"
-        socket.parent.mkdir()
-        if self.podman("image", "exists", self.image, check=False).returncode:
-            build = [
-                "podman",
-                "build",
-                "--tag",
-                self.image,
-                str(LibvirtContainer.CONTEXT),
-            ]
-            subprocess.run(build, check=True)
-        self.podman("run", "--detach", "--rm", *self.options(), self.image)
-        # Systemd creates the socket, and then the rest of booting can be waited for. It exits with an error when
-        # booting finished with a failed unit ("degraded") too.
-        wait_until(socket.exists, self.start_timeout)
-        self.podman(
-            "exec", self.name, "systemctl", "is-system-running", "--wait", check=False
-        )
-        pid = self.pid()
-        uri = f"qemu+unix:///system?socket={socket}"
-        lock = self.directory / "subnets.lock"
-        self.defaults.enter_context(HOST.set(ContainerCommunicator(pid)))
-        self.defaults.enter_context(LVURI.set(uri))
-        self.defaults.enter_context(SubnetReservation.LOCK.set(str(lock)))
+        command = f"{shlex.join(remove)} > /dev/null; rm -r {directory}"
+        try:
+            with guarded(command) as self.guard:
+                self._start(self.directory)
+        except BaseException:
+            self.directory = None
+            raise
 
     @override
     def destroy(self) -> None:
@@ -82,9 +60,7 @@ class LibvirtContainer(Resource):
         return [
             f"--name={self.name}",
             "--cap-add=NET_ADMIN,NET_RAW",
-            # libvirt sets up its bridges' sysctls (only the container's network's).
             "--security-opt=unmask=/proc/sys",
-            # Lets QEMU use the mounts as they are.
             "--security-opt=label=disable",
             *(f"--device={device}" for device in devices),
             f"--volume={self.directory}/libvirt:/run/libvirt",
@@ -102,3 +78,27 @@ class LibvirtContainer(Resource):
         return subprocess.run(
             ["podman", *args], check=check, capture_output=True, text=True
         )
+
+    def _start(self, directory: Path) -> None:
+        socket = directory / "libvirt/virtqemud-sock"
+        socket.parent.mkdir()
+        if self.podman("image", "exists", self.image, check=False).returncode:
+            build = [
+                "podman",
+                "build",
+                "--tag",
+                self.image,
+                str(LibvirtContainer.CONTEXT),
+            ]
+            subprocess.run(build, check=True)
+        self.podman("run", "--detach", "--rm", *self.options(), self.image)
+        wait_until(socket.exists, self.start_timeout)
+        self.podman(
+            "exec", self.name, "systemctl", "is-system-running", "--wait", check=False
+        )
+        pid = self.pid()
+        uri = f"qemu+unix:///system?socket={socket}"
+        lock = directory / "subnets.lock"
+        self.defaults.enter_context(HOST.set(ContainerCommunicator(pid)))
+        self.defaults.enter_context(LVURI.set(uri))
+        self.defaults.enter_context(SubnetReservation.LOCK.set(str(lock)))

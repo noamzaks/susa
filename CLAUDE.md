@@ -49,14 +49,18 @@ around libvirt/QEMU virtual machines of many architectures.
   return resources that aren't created yet.
 - **Models are values, entities are live.** Models build libvirt XML with chainable builders returning `Self`, and
   `get_*()` getters. Builder methods and constructor parameters are the recipe format, so keep them JSON-friendly.
-- **Workarounds stay where they're needed**, with a comment saying why, never in general helpers. Bugs in a dependency
+- **Nothing leaks.** What a resource makes or starts is undone when it's destroyed, when creating it fails partway, and
+  when the process ends however it does (even SIGKILL): a `Guard` (a shell waiting on a pipe only this process holds)
+  runs the cleanup unless it's cancelled (`guarded`, `virsh_guarded`, `kubectl_guarded`), commands run in process groups
+  killed with them, and temporary files are `memory_file`s. Tests kill a child process to check it.
+- **Workarounds stay where they're needed**, never in general helpers. Bugs in a dependency
   we own (e.g. `pytest-greendots`) get fixed there.
 
 ## Conventions
 
 - Keep code minimal and succinct:
   - No docstrings; abstract methods are just `...`.
-  - Comments only where something really isn't clear from the code.
+  - No comments (only tool directives like `# type: ignore`).
   - Prefer simple code over defensive code. No try/except or fallbacks for cases that shouldn't happen; use `assert`
     sanity checks instead. Never rely on an `assert` for a side effect.
   - Return early (`if not ...: return`) rather than wrapping the rest of a function in an `if`.

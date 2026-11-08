@@ -21,13 +21,13 @@ from susa.core.stream import InputStream, OutputStream
 from susa.utilities.generic import Deadline
 
 
-# gzip, tar and mktemp aren't in the Unix spec, but they're everywhere.
 class UnixCommunicator(AsyncCommandRunner, FileTransferrer):
     PRINTF_CHUNK_SIZE = 512
 
     def __init__(self, communicator: CommandRunner) -> None:
         self.communicator = communicator
         self.directory: str | None = None
+        self.commands: list[UnixCommand] = []
 
     @override
     def create(self) -> None:
@@ -37,10 +37,13 @@ class UnixCommunicator(AsyncCommandRunner, FileTransferrer):
     @override
     def destroy(self) -> None:
         assert self.directory is not None
+        while self.commands:
+            command = self.commands.pop()
+            if command.poll() is None:
+                command.kill()
         self.communicator.check(f"rm -r {shlex.quote(self.directory)}")
         self.directory = None
 
-    # Its streams are read through the same shell, so after it exited rather than while it's waited for.
     @override
     def run(
         self, command: str, timeout: float | None = None
@@ -55,7 +58,9 @@ class UnixCommunicator(AsyncCommandRunner, FileTransferrer):
 
     @override
     def start(self, command: str) -> UnixCommand:
-        return UnixCommand(self, command)
+        result = UnixCommand(self, command)
+        self.commands.append(result)
+        return result
 
     @override
     def upload_single(
@@ -75,7 +80,6 @@ class UnixCommunicator(AsyncCommandRunner, FileTransferrer):
         archive = BytesIO()
         with tarfile.open(fileobj=archive, mode="w") as tar:
             for local, remote in files.items():
-                # Unlike `tar.add`, this keeps absolute names (and not the local owner).
                 stat = local.stat()
                 info = tarfile.TarInfo(remote)
                 info.size, info.mode = stat.st_size, stat.st_mode
@@ -84,7 +88,6 @@ class UnixCommunicator(AsyncCommandRunner, FileTransferrer):
                     tar.addfile(info, file)
         temporary = self.temporary_file()
         self.write_file(archive.getvalue(), temporary, deadline.remaining())
-        # `-P` keeps each given path, absolute or relative.
         quoted = shlex.quote(temporary)
         self.communicator.check(
             f"tar -xPf {quoted} && rm {quoted}", deadline.remaining()
@@ -105,7 +108,6 @@ class UnixCommunicator(AsyncCommandRunner, FileTransferrer):
                 assert extracted is not None
                 files[member.name].write_bytes(extracted.read())
 
-    # There may be no decoder like `base64` (e.g. on FreeBSD 10).
     def write_file(
         self, data: bytes, remote: str, timeout: float | None = None
     ) -> None:
@@ -125,7 +127,6 @@ class UnixCommunicator(AsyncCommandRunner, FileTransferrer):
     def temporary_file(self) -> str:
         return self.communicator.check("mktemp").decode().strip()
 
-    # A command at a time, since a terminal drops what a slow shell hasn't read yet.
     def append(self, data: bytes, target: str, timeout: float | None = None) -> None:
         deadline = Deadline(timeout)
         for i in range(0, len(data), UnixCommunicator.PRINTF_CHUNK_SIZE):
@@ -140,6 +141,11 @@ class UnixCommunicator(AsyncCommandRunner, FileTransferrer):
 
 class UnixCommand(AsyncCommand):
     POLL_INTERVAL = 0.2
+    TREE = (
+        "ps -A -o pid= -o ppid= | awk -v root={pid} '{{ parent[$1] = $2 }} END {{ tree[root] = 1;"
+        " do {{ grown = 0; for (p in parent) if (!(p in tree) && (parent[p] in tree)) {{ tree[p] = 1; grown = 1 }} }}"
+        " while (grown); for (p in tree) print p }}'"
+    )
 
     def __init__(self, unix: UnixCommunicator, command: str) -> None:
         self.unix = unix
@@ -148,8 +154,6 @@ class UnixCommand(AsyncCommand):
         directory = unix.communicator.check(f"mktemp -d {template}").decode().strip()
         directory = shlex.quote(directory)
         fifo = f"{directory}/in"
-        # This shell opens the FIFO's ends (first read-write, so that neither blocks) before starting the command and
-        # what holds its input open, so that both have them however long they take to start.
         unix.communicator.check(
             f"mkfifo {fifo} && exec 3<> {fifo} 4> {fifo} 5< {fifo} 3<&-"
         )
@@ -184,7 +188,6 @@ class UnixCommand(AsyncCommand):
     def poll(self) -> int | None:
         if self.exit_code is not None:
             return self.exit_code
-        # It's empty until the exit code is written (at once).
         status = self.unix.communicator.run(f"cat {self.status} 2> /dev/null").stdout
         if not status:
             return None
@@ -202,18 +205,18 @@ class UnixCommand(AsyncCommand):
 
     @override
     def kill(self) -> None:
-        self.unix.communicator.check(f"kill {self.pid}")
+        tree = UnixCommand.TREE.format(pid=self.pid)
+        self.unix.communicator.check(
+            f"kill -STOP $({tree}) 2> /dev/null; kill -KILL $({tree}) 2> /dev/null; true"
+        )
+        self._stdin.close()
 
-    # From a subshell, so that it isn't one of this shell's jobs, which interactive shells print about (e.g. "[1] 1234",
-    # or that one finished). The subshell writes its exit code to `status`, and stops holding the output (so that it's
-    # read) once it started.
     def background(self, command: str, status: str) -> str:
         waiter = f"{command} 4>&- 5<&- & echo $!; exec > /dev/null 4>&- 5<&-; wait $!; echo $? > {status}"
         return self.unix.communicator.check(f"echo $( ({waiter}) & )").decode().strip()
 
 
 class UnixInputStream(InputStream):
-    # The holder keeps the FIFO open (so the command doesn't see its end) until it's closed.
     def __init__(self, unix: UnixCommunicator, path: str, holder: str) -> None:
         self.unix = unix
         self.path = path

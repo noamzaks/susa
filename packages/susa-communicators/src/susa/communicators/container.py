@@ -9,9 +9,6 @@ from susa.core.communicator import AsyncCommand, HostAsyncCommandRunner
 from susa.core.serializable import JSON
 
 
-# Runs commands in a process' namespaces (e.g. a container's user, network and PID ones), with this system's programs
-# and files. Unlike with `podman exec`, they're this process' children, which stop when they're killed or it ends, and
-# in its PID namespace they stop with the container too.
 class ContainerCommunicator(HostAsyncCommandRunner):
     def __init__(
         self, pid: int, namespaces: Sequence[str] = ("user", "net", "pid")

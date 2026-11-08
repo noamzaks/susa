@@ -43,7 +43,6 @@ class OutputStream(ABC):
             except EOFError:
                 return result
 
-    # In a thread, so that what writes it doesn't wait for it to be read (e.g. while it's waited for).
     def read_all_in_background(self) -> Future[bytes]:
         executor = ThreadPoolExecutor(1)
         future = executor.submit(self.read_all)
@@ -111,7 +110,6 @@ class SavedOutputStream(OutputStream):
         return result
 
 
-# An unbuffered file (whose reads return whatever arrived), e.g. a pipe.
 class FileStream(InputOutputStream):
     CHUNK_SIZE = 1 << 16
 

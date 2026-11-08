@@ -27,15 +27,12 @@ def test_ping() -> None:
     single = ping("127.0.0.1")
     assert isinstance(single, float)
 
-    # The timeout is for the whole run.
     multiple = pings("127.0.0.1", 3, timeout=5, interval=1)
     assert len(multiple) == 3
     assert all(isinstance(time, float) for time in multiple)
-    # The replies until the timeout.
     partial = pings("127.0.0.1", 5, timeout=2.5, interval=1)
     assert [time is not None for time in partial] == [True] * 3 + [False] * 2
 
-    # 10.255.255.1 is a non-routable address, so no replies should come back.
     assert pings("10.255.255.1", 2) == [None, None]
 
     with pytest.raises(subprocess.CalledProcessError):
@@ -58,7 +55,6 @@ def test_random_mac_full_prefix() -> None:
     assert random_mac("52:54:00:12:34:56") == "52:54:00:12:34:56"
 
 
-# Kept until the worker exits.
 def reserve() -> ipaddress.IPv4Network:
     reservation = SubnetReservation()
     reservation.create()
@@ -104,7 +100,6 @@ def test_subnet_reservation_lock(tmp_path: Path) -> None:
         assert (tmp_path / "c").exists()
 
 
-# The same subnet's byte, whichever subnets it's of.
 def test_subnet_reservation_subnets(tmp_path: Path) -> None:
     lock = tmp_path / "lock"
     with SubnetReservation(Routes(), lock, "10.200.0.0/16") as wide:

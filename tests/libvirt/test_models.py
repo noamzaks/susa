@@ -18,7 +18,6 @@ from susa.utilities.generic import GIGA
 MAC = "52:54:00:12:34:56"
 
 
-# Keep the XML independent of the machine the tests run on.
 @pytest.fixture(autouse=True)
 def fake_host_arch(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(platform, "machine", lambda: "x86_64")
@@ -169,7 +168,6 @@ def test_interface_model_random_mac() -> None:
         mac = LVInterfaceModel().get_mac()
         assert re.fullmatch(r"52:54:00(:[0-9a-f]{2}){3}", mac)
         macs.add(mac)
-    # 10 random 24-bit suffixes colliding is (practically) impossible.
     assert len(macs) > 1
 
 
@@ -218,7 +216,6 @@ def test_network_model_interface_picks_free_ips() -> None:
     network.interface(LVInterfaceModel(mac="52:54:00:00:00:04"))
     assert network.get_hosts() == {
         "52:54:00:00:00:01": "10.0.0.3",
-        # The gateway (10.0.0.1) isn't in the DHCP range, and 10.0.0.3 is taken.
         "52:54:00:00:00:02": "10.0.0.2",
         "52:54:00:00:00:03": "10.0.0.4",
         "52:54:00:00:00:04": "10.0.0.5",
@@ -232,7 +229,6 @@ def test_network_model_interface_picks_ip_below_gateway() -> None:
 
 
 def test_network_model_interface_no_free_ip() -> None:
-    # A /30 has only 2 hosts, one of which is the gateway.
     network = LVNetworkModel("test").default().ip("10.0.0.1", "255.255.255.252")
     network.interface(LVInterfaceModel(mac="52:54:00:00:00:01"))
     assert network.get_hosts() == {"52:54:00:00:00:01": "10.0.0.2"}

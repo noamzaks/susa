@@ -49,7 +49,6 @@ def pings(
         process.kill()
         process.wait()
     else:
-        # ping exits with 1 when some replies are missing, and with other codes on actual errors.
         if returncode not in (0, 1):
             raise subprocess.CalledProcessError(
                 returncode, command, stderr=process.stderr.read_all()
@@ -61,7 +60,6 @@ def pings(
         index = int(match.group(1)) - 1
         time = float(match.group(2))
 
-        # Sanity.
         assert 0 <= index < count
         assert times[index] is None
 
@@ -82,16 +80,12 @@ def random_mac(prefix: str | None = None) -> str:
     return ":".join(parts)
 
 
-# A /24 of the given subnets overlapping none of the host's routes, reserved across processes by locking its byte (its
-# number among all /24s) of the lock file.
 class SubnetReservation(Resource):
     LOCK: ClassVar[Variable[str]] = EnvironmentVariable(
         "SUSA_SUBNETS_LOCK",
         default_factory=lambda: str(Path(tempfile.gettempdir()) / "susa-subnets.lock"),
     )
-    # A process' own locks don't stop it.
     TAKEN: ClassVar[set[tuple[Path, int]]] = set()
-    # Open while this process has reservations in them, as closing any of its descriptors of one releases its locks.
     FILES: ClassVar[dict[Path, int]] = {}
 
     def __init__(
@@ -140,7 +134,6 @@ class SubnetReservation(Resource):
             os.close(SubnetReservation.FILES.pop(self.lock))
         self.index, self.subnet = None, None
 
-    # Every user locks it, which the umask stops at creation.
     def lock_file(self) -> int:
         if self.lock not in SubnetReservation.FILES:
             lock = SubnetReservation.FILES[self.lock] = os.open(

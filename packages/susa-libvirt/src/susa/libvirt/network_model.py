@@ -49,7 +49,6 @@ class LVNetworkModel(LVModel):
             )
         put(self.element, ip)
 
-        # Guests can resolve the host's address (which e.g. some rlogin servers require of clients).
         host = node(
             "host", elements=[node("hostname", text="host")], attrs={"ip": address}
         )
@@ -92,7 +91,6 @@ class LVNetworkModel(LVModel):
         assert name is not None
         return name
 
-    # The IPs reserved for MAC addresses.
     def get_hosts(self) -> dict[str, str | None]:
         hosts = self.element.findall("ip/dhcp/host")
         return {h.attrib["mac"]: h.get("ip") for h in hosts if "mac" in h.attrib}

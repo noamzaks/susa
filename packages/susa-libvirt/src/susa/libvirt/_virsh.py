@@ -1,15 +1,15 @@
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import shlex
 import subprocess
-import tempfile
+from collections.abc import Sequence
 
 from susa.core.variable import EnvironmentVariable
-from susa.utilities.generic import run
+from susa.utilities.generic import Guard, guarded, run
 
-# `None` is libvirt's default, `LIBVIRT_DEFAULT_URI`.
 LVURI: EnvironmentVariable[str | None] = EnvironmentVariable("SUSA_LVURI", None)
 
 
@@ -18,12 +18,11 @@ def virsh_command(*args: str) -> list[str]:
     return ["virsh", *(["-c", uri] if uri else []), *args]
 
 
-def virsh(*args: str) -> str:
-    # Its messages are parsed.
-    return run(virsh_command(*args), environment={**os.environ, "LC_ALL": "C"})
+def virsh(*args: str, stdin: str | None = None) -> str:
+    environment = {**os.environ, "LC_ALL": "C"}
+    return run(virsh_command(*args), stdin, environment)
 
 
-# Runs with the data as its input, returning its output as it is (quietly, so it's all there is).
 def virsh_data(*args: str, data: bytes = b"") -> bytes:
     command = virsh_command("-q", *args)
     logging.info(shlex.join(command))
@@ -34,9 +33,12 @@ def virsh_data(*args: str, data: bytes = b"") -> bytes:
     return result.stdout
 
 
-# Runs with a file of the XML as the last argument.
 def virsh_xml(xml: str, *args: str) -> str:
-    with tempfile.NamedTemporaryFile("w", suffix=".xml") as file:
-        file.write(xml)
-        file.flush()
-        return virsh(*args, file.name)
+    return virsh(*args, "/dev/stdin", stdin=xml)
+
+
+def virsh_guarded(
+    *commands: Sequence[str],
+) -> contextlib.AbstractContextManager[Guard]:
+    virshes = (shlex.join(virsh_command(*command)) for command in commands)
+    return guarded("; ".join(f"{command} > /dev/null 2>&1" for command in virshes))

@@ -1,12 +1,11 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import re
-import tempfile
 import time
 import xml.etree.ElementTree as ET
 from collections.abc import Sequence
-from pathlib import Path
 
 from typing_extensions import override
 
@@ -24,12 +23,18 @@ from susa.core.machine import (
 )
 from susa.core.saveable import Saveable
 from susa.core.serializable import JSON, deserialize, serialize
-from susa.libvirt._virsh import virsh, virsh_command, virsh_data, virsh_xml
+from susa.libvirt._virsh import (
+    virsh,
+    virsh_command,
+    virsh_data,
+    virsh_guarded,
+    virsh_xml,
+)
 from susa.libvirt.entity import LVEntity
 from susa.libvirt.interface_model import LVInterfaceModel
 from susa.libvirt.machine_model import LVMachineModel, LVSnapshotModel
 from susa.libvirt.network_model import LVNetworkModel
-from susa.utilities.generic import run
+from susa.utilities.generic import Guard, memory_file, run
 
 
 class LVSnapshot(LVEntity[LVSnapshotModel], Snapshot):
@@ -43,12 +48,15 @@ class LVSnapshot(LVEntity[LVSnapshotModel], Snapshot):
 
     @override
     def create(self) -> None:
-        virsh_xml(self._xml(), "snapshot-create", self.machine.name, "--xmlfile")
+        delete = ["snapshot-delete", self.machine.name, self.model.get_name()]
+        with virsh_guarded(delete) as self.guard:
+            virsh_xml(self._xml(), "snapshot-create", self.machine.name, "--xmlfile")
 
     @override
     def destroy(self) -> None:
         self.revert()
         virsh("snapshot-delete", self.machine.name, self.model.get_name())
+        self.guard.cancel()
 
     @override
     def revert(self) -> None:
@@ -97,18 +105,16 @@ class LVMachine(
 
     @override
     def create(self) -> None:
-        virsh_xml(self._xml(), "define")
-        virsh("start", self.name)
+        with self._guarded() as self.guard:
+            virsh_xml(self._xml(), "define")
+            virsh("start", self.name)
 
     @override
     def destroy(self) -> None:
         if self.is_powered_on:
             self.power_off()
-
-        flags = ["--managed-save", "--snapshots-metadata"]
-        if self.model.get_firmware() == "efi":
-            flags.append("--nvram")
-        virsh("undefine", self.name, *flags)
+        virsh("undefine", *self._undefine())
+        self.guard.cancel()
 
     @override
     def snapshot(self) -> LVSnapshot:
@@ -141,11 +147,11 @@ class LVMachine(
 
     @override
     def screenshot(self) -> Screenshot:
-        with tempfile.NamedTemporaryFile() as file:
-            output = virsh("screenshot", self.name, "--file", file.name)
+        with memory_file() as file:
+            output = virsh("screenshot", self.name, "--file", str(file))
             match = re.search(r"type of (\S+)", output)
             assert match is not None, output
-            return Screenshot(Path(file.name).read_bytes(), match[1])
+            return Screenshot(file.read_bytes(), match[1])
 
     @override
     def serial(self) -> CommandSerial:
@@ -156,55 +162,74 @@ class LVMachine(
         hold = str(round(hold_time * 1000))
         codes = [str(key.value) for key in keys]
         virsh("send-key", self.name, "--codeset", "linux", "--holdtime", hold, *codes)
-        # libvirt returns before they're released, and the next keys would queue up behind them.
         time.sleep(hold_time)
 
-    # Its memory (if it's running) and its volumes' contents, which are saved while it's stopped (for its memory),
-    # so they're as the memory has them. The memory is saved to a volume of its first volume's pool, which libvirt
-    # hands over.
     @override
     def save(self) -> JSON:
         if not self.is_powered_on:
             return {"memory": None, "volumes": self._save_volumes()}
         pool, name = self._memory_volume()
         path = f"{_pool_path(pool)}/{name}"
-        virsh("save", self.name, path, "--image-format", "zstd")
-        try:
-            volumes = self._save_volumes()
-            virsh("pool-refresh", pool)
-            memory = virsh_data("vol-download", "--pool", pool, name, "/dev/stdout")
-        finally:
-            virsh("restore", path)
-            virsh("vol-delete", "--pool", pool, name)
+        delete = ["vol-delete", "--pool", pool, name]
+        with virsh_guarded(["pool-refresh", pool], delete) as guard:
+            virsh("save", self.name, path, "--image-format", "zstd")
+            try:
+                volumes = self._save_volumes()
+                virsh("pool-refresh", pool)
+                memory = virsh_data("vol-download", "--pool", pool, name, "/dev/stdout")
+            finally:
+                virsh("restore", path)
+                virsh(*delete)
+            guard.cancel()
         return {"memory": memory.hex(), "volumes": volumes}
 
-    # Into its volumes, which must be created already. libvirt restores a memory only with the XML it was saved with.
     @override
     def restore(self, state: JSON) -> None:
         assert isinstance(state, dict)
         volumes, memory = state["volumes"], state["memory"]
         assert isinstance(volumes, list)
-        for volume in volumes:
-            assert isinstance(volume, dict)
-            pool, name, contents = volume["pool"], volume["name"], volume["contents"]
-            assert isinstance(pool, str) and isinstance(name, str)
-            assert isinstance(contents, str)
-            data = bytes.fromhex(contents)
-            virsh_data("vol-upload", "--pool", pool, name, "/dev/stdin", data=data)
-        if memory is None:
-            virsh_xml(self._xml(), "define")
-            return
-        assert isinstance(memory, str)
-        data = bytes.fromhex(memory)
+        with self._guarded() as self.guard:
+            for volume in volumes:
+                assert isinstance(volume, dict)
+                pool, name, contents = (
+                    volume["pool"],
+                    volume["name"],
+                    volume["contents"],
+                )
+                assert isinstance(pool, str) and isinstance(name, str)
+                assert isinstance(contents, str)
+                data = bytes.fromhex(contents)
+                virsh_data("vol-upload", "--pool", pool, name, "/dev/stdin", data=data)
+            if memory is None:
+                virsh_xml(self._xml(), "define")
+                return
+            assert isinstance(memory, str)
+            self._restore_memory(bytes.fromhex(memory))
+
+    def _restore_memory(self, memory: bytes) -> None:
         pool, name = self._memory_volume()
-        virsh("vol-create-as", pool, name, str(len(data)), "--format", "raw")
-        try:
-            virsh_data("vol-upload", "--pool", pool, name, "/dev/stdin", data=data)
-            path = virsh("vol-path", "--pool", pool, name).strip()
-            virsh_xml(virsh("save-image-dumpxml", path), "define")
-            virsh("restore", path)
-        finally:
-            virsh("vol-delete", "--pool", pool, name)
+        delete = ["vol-delete", "--pool", pool, name]
+        with virsh_guarded(delete) as guard:
+            virsh("vol-create-as", pool, name, str(len(memory)), "--format", "raw")
+            try:
+                virsh_data(
+                    "vol-upload", "--pool", pool, name, "/dev/stdin", data=memory
+                )
+                path = virsh("vol-path", "--pool", pool, name).strip()
+                virsh_xml(virsh("save-image-dumpxml", path), "define")
+                virsh("restore", path)
+            finally:
+                virsh(*delete)
+            guard.cancel()
+
+    def _guarded(self) -> contextlib.AbstractContextManager[Guard]:
+        return virsh_guarded(["destroy", self.name], ["undefine", *self._undefine()])
+
+    def _undefine(self) -> list[str]:
+        flags = ["--managed-save", "--snapshots-metadata"]
+        if self.model.get_firmware() == "efi":
+            flags.append("--nvram")
+        return [self.name, *flags]
 
     def _save_volumes(self) -> JSON:
         return [
@@ -232,18 +257,14 @@ def _pool_path(pool: str) -> str:
     return path
 
 
-# Without internal snapshots (which hold whole memories), dropped without opening its backing image, which may not be on
-# this system.
 def _volume_contents(pool: str, name: str) -> bytes:
     data = virsh_data("vol-download", "--pool", pool, name, "/dev/stdout")
     if not data.startswith(b"QFI\xfb"):
         return data
-    with tempfile.NamedTemporaryFile() as file:
-        file.write(data)
-        file.flush()
-        options = {"file": {"driver": "file", "filename": file.name}, "backing": None}
+    with memory_file(data) as file:
+        options = {"file": {"driver": "file", "filename": str(file)}, "backing": None}
         image = "json:" + json.dumps({"driver": "qcow2", **options})
         info = json.loads(run(["qemu-img", "info", "--output=json", image]))
         for snapshot in info.get("snapshots", []):
             run(["qemu-img", "snapshot", "-d", snapshot["name"], image])
-        return Path(file.name).read_bytes()
+        return file.read_bytes()

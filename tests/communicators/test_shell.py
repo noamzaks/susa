@@ -27,7 +27,6 @@ class LocalShell(ShellCommunicator):
 
     @override
     def open_stream(self) -> InputOutputStream:
-        # A terminal, as ShellCommunicator expects: without one, e.g. bash doesn't take "\r" as the end of a line.
         stream = CommandSerial(self.argv)
         stream.create()
         return stream
@@ -50,10 +49,18 @@ def result(result: CompletedProcess[bytes]) -> tuple[int, bytes, bytes | None]:
 
 
 def assert_gone(runner: CommandRunner, pattern: str) -> None:
-    # Signalled processes exit asynchronously, so give them a moment.
     runner.check(
         f"(for i in $(seq 50); do pgrep -f '^{pattern}$' > /dev/null || exit 0; sleep 0.1; done; exit 1)"
     )
+
+
+def test_create_fails(shell: LocalShell, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ShellCommunicator, "CONNECT_TIMEOUT", 0)
+    monkeypatch.setattr(ShellCommunicator, "SETUP_ATTEMPT_TIMEOUT", 0.5)
+    sleeping = sleep(shell, 3614)
+    with pytest.raises(TimeoutError):
+        LocalShell(sleeping.split()).create()
+    assert_gone(shell, sleeping)
 
 
 def test_shell_run(shell: LocalShell) -> None:
@@ -90,7 +97,6 @@ def test_run(unix: UnixCommunicator) -> None:
     assert (error.value.returncode, error.value.stderr) == (3, b"oops\n")
 
 
-# Of its own, unlike the other shell's tests, which run in parallel.
 def sleep(shell: LocalShell, seconds: int) -> str:
     return f"sleep {seconds + list(SHELLS.values()).index(shell.argv)}"
 
@@ -123,11 +129,11 @@ def test_start_read_size(unix: UnixCommunicator) -> None:
 
 def test_start_kill(shell: LocalShell, unix: UnixCommunicator) -> None:
     sleeping = sleep(shell, 3601)
-    command = unix.start(f"exec {sleeping}")
+    command = unix.start(f"{sleeping}; true")
     with pytest.raises(TimeoutError):
         command.wait(timeout=0.5)
     command.kill()
-    assert command.wait(timeout=5) == 128 + 15
+    assert command.wait(timeout=5) == 128 + 9
     assert_gone(shell, sleeping)
 
 
@@ -143,7 +149,6 @@ def test_start_stdin(unix: UnixCommunicator) -> None:
         command.stdout.read()
 
 
-# The shell doesn't print about what runs in the background (e.g. "[1] 1234", or that it finished).
 def test_start_quiet(shell: LocalShell, unix: UnixCommunicator) -> None:
     command = unix.start("true")
     assert command.pid.isdigit()
@@ -177,8 +182,6 @@ def test_transfer_multiple(
         assert (tmp_path / "down" / name).read_bytes() == content
 
 
-# A program the shell starts with may discard what's typed, e.g. FreeBSD's resizewin, which reads the terminal's reply to
-# a query (in raw mode, so even Ctrl-C). Wherever that stops, the shell ends up fully set up.
 @pytest.mark.parametrize("discarded", range(64))
 def test_discarded_input(
     discarded: int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

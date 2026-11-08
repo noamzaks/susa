@@ -1,13 +1,9 @@
 from __future__ import annotations
 
 import os
-import subprocess
-import sys
 
 import pytest
 
-from susa.communicators.container import ContainerCommunicator
-from susa.core.communicator import HOST
 from susa.core.variable import EnvironmentVariable, Variable
 
 
@@ -57,10 +53,7 @@ def test_environment_variable() -> None:
     assert variable.get() == "a"
 
 
-# Processes started meanwhile start with it.
-def test_environment_variable_process() -> None:
-    code = "from susa.core.communicator import HOST; print(vars(HOST.get()))"
-    host = ContainerCommunicator(1, ["net"])
-    with HOST.set(host):
-        output = subprocess.check_output([sys.executable, "-c", code], text=True)
-    assert output == "{'pid': 1, 'namespaces': ['net']}\n"
+def test_environment_variable_initial(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SUSA_TEST_VARIABLE", '"c"')
+    variable = EnvironmentVariable("SUSA_TEST_VARIABLE", "a")
+    assert variable.get() == "c"

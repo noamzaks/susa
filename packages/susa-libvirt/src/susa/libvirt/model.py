@@ -22,7 +22,6 @@ def node(
     return element
 
 
-# Children are sorted by tag and attributes by name, so that the XML doesn't depend on the order the builders ran in.
 def add(parent: ET.Element, element: ET.Element) -> None:
     index = bisect.bisect_right(parent, element.tag, key=lambda other: other.tag)
     parent.insert(index, element)
@@ -52,7 +51,6 @@ class LVModel(Serializable):
         ET.indent(self.element)
         return ET.tostring(self.element, encoding="unicode")
 
-    # Models' constructor arguments are all optional.
     @classmethod
     def of(cls, element: ET.Element) -> Self:
         model = cls()

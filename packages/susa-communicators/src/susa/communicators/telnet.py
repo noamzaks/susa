@@ -26,7 +26,5 @@ class TelnetCommunicator(ShellCommunicator):
 
     @override
     def open_stream(self) -> InputOutputStream:
-        # 8-bit clean, with no escape character (which would otherwise be intercepted in the data), and without
-        # ~/.telnetrc.
         command = ["telnet", "-8", "-E", "-c", self.ip, str(self.port)]
         return AsyncCommandStream(self.host.start(shlex.join(command)))

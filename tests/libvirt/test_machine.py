@@ -6,7 +6,9 @@ import logging
 import os
 import random
 import shutil
+import signal
 import subprocess
+import sys
 import time
 from collections.abc import Callable, Generator, Iterator, Sequence
 from dataclasses import dataclass
@@ -22,6 +24,7 @@ from susa.core.communicator import FileTransferrer
 from susa.core.machine import wait_until_booted
 from susa.core.resource import Resource
 from susa.core.saveable import SavedResources, save
+from susa.core.serializable import serialize
 from susa.libvirt import (
     LVMachine,
     LVNetwork,
@@ -47,7 +50,6 @@ BOOT_TIMEOUT = 300
 QUIET_TIME = 5
 
 
-# A base image, and the steps of the machine's recipe for it (setting it up for its architecture, with 2 GB).
 @dataclass(frozen=True)
 class Image:
     path: Path
@@ -87,7 +89,6 @@ IMAGES = {
     "aarch64": Image(
         MACHINES / "debian_aarch64.qcow2", [{"arch": "aarch64"}, {"cpu": 2}, "efi"]
     ),
-    # Malta has no firmware, so the kernel and initrd come from outside the disk (and it can't do more CPUs well).
     "mips": Image(
         MACHINES / "debian_mips.qcow2",
         [
@@ -102,11 +103,9 @@ IMAGES = {
             },
         ],
     ),
-    # The disk has its own bootloader (grub-ieee1275 in a PReP partition).
     "ppc64le": Image(
         MACHINES / "debian_ppc64le.qcow2", [{"arch": "ppc64le"}, {"cpu": 2}]
     ),
-    # There's no firmware or bootloader, so the kernel and initrd come from outside the disk.
     "armv7l": Image(
         MACHINES / "debian_armv7l.qcow2",
         [
@@ -121,7 +120,6 @@ IMAGES = {
             },
         ],
     ),
-    # The installer can't set up a bootloader without firmware, so the kernel and initrd come from outside the disk.
     "riscv64": Image(
         MACHINES / "debian_riscv64.qcow2",
         [
@@ -136,10 +134,7 @@ IMAGES = {
             },
         ],
     ),
-    # BIOS (SeaBIOS) and grub-pc on the disk itself. "i686" is libvirt's name for it.
     "i386": Image(MACHINES / "debian_i386.qcow2", [{"arch": "i686"}, {"cpu": 2}]),
-    # BIOS, with the loader, kernel and a getty on the serial console as well. FreeBSD 15.1 and 10.4 use its `/bin/sh`
-    # rather than bash.
     "freebsd": Image(
         MACHINES / "freebsd_x86_64.qcow2", [{"arch": "x86_64"}, {"cpu": 2}]
     ),
@@ -148,7 +143,6 @@ IMAGES = {
     ),
 }
 
-# All of the images have sshd, telnet and rlogin servers, and `root` and `user` with the password `a`.
 LOGIN = {"ip": {"$ref": "machine.ip"}, "username": "root", "password": "a"}
 COMMUNICATORS: dict[str, dict[str, Any]] = {
     "serial": {
@@ -176,7 +170,6 @@ def uri() -> Iterator[None]:
         yield
 
 
-# Each image's tests share one worker (see `--dist loadgroup` in pyproject.toml), so it boots once.
 @pytest.fixture(
     scope="module",
     params=[pytest.param(n, marks=pytest.mark.xdist_group(n)) for n in IMAGES],
@@ -231,18 +224,15 @@ def test_ping(machine: LVMachine) -> None:
 
 def test_screenshot(machine: LVMachine) -> None:
     screenshot = machine.screenshot()
-    # PNG or PPM, depending on the QEMU version.
     assert screenshot.data.startswith((b"\x89PNG\r\n\x1a\n", b"P6"))
 
 
 def test_serial(machine: LVMachine) -> None:
     with machine.serial() as serial:
-        # Whatever's on the console (e.g. getty) answers a line.
         serial.write(b"\r")
         assert serial.read(timeout=30)
         serial.wait_until_quiet(QUIET_TIME, 60)
 
-        # Reads stop at `size`, leaving the rest for the next read.
         serial.write(b"\r")
         assert len(serial.read(1, timeout=30)) == 1
         assert serial.read(timeout=30)
@@ -283,7 +273,6 @@ CLIENTS = {"telnet": "telnet", "rlogin": "rlogin"}
 SHELLS = ("serial", "ssh", "telnet", "rlogin")
 TRANSFERRERS = ("serial", "ssh", "ssh-scp", "ssh-unix", "telnet", "rlogin")
 UNAME = {name: name for name in IMAGES} | {
-    # The CPU is i486-class (see `ARCH_DEFAULTS`).
     "i386": "i486",
     "freebsd": "amd64",
     "freebsd10": "amd64",
@@ -320,14 +309,60 @@ def test_start(machine: LVMachine, kind: str) -> None:
         assert command.stderr.read() == b"done\n"
 
 
-# What it started stops when its shell disconnects.
 @pytest.mark.parametrize("kind", SHELLS)
 def test_disconnect(machine: LVMachine, kind: str) -> None:
-    # Unlike its own command line.
     sleeping = "pgrep -f '[s]leep 3606'"
     with unix(machine, kind) as u:
         u.start("sleep 3606; true")
         wait_until(lambda: u.communicator.run(sleeping).returncode == 0, 10)
+    with shell(machine, "ssh") as ssh:
+        wait_until(lambda: ssh.run(sleeping).returncode == 1, 10)
+
+
+def test_kill(machine: LVMachine) -> None:
+    sleeping = "pgrep -f '[s]leep 3608'"
+    with shell(machine, "ssh") as ssh:
+        with UnixCommunicator(ssh) as u:
+            command = u.start("sleep 3608; true")
+            wait_until(lambda: ssh.run(sleeping).returncode == 0, 10)
+            command.kill()
+            assert command.wait(10) != 0
+            assert ssh.run(sleeping).returncode == 1
+            u.start("sleep 3608; true")
+            wait_until(lambda: ssh.run(sleeping).returncode == 0, 10)
+        assert ssh.run(sleeping).returncode == 1
+
+
+CRASH = """
+import json, os, signal, sys
+from susa.communicators.unix import UnixCommunicator
+from susa.core.serializable import deserialize
+from susa.recipes import Recipe
+from susa.utilities.generic import wait_until
+
+machine = deserialize(json.loads(sys.argv[1]))
+communicator = Recipe.model_validate(json.loads(sys.argv[2])).make(machine=machine)
+communicator.create()
+unix = UnixCommunicator(communicator)
+unix.create()
+unix.start("sleep 3607; true")
+wait_until(lambda: communicator.run(sys.argv[3]).returncode == 0, 10)
+os.kill(os.getpid(), signal.SIGKILL)
+"""
+
+
+@pytest.mark.parametrize("kind", SHELLS)
+def test_crash(machine: LVMachine, kind: str) -> None:
+    if shutil.which(CLIENTS.get(kind, "true")) is None:
+        pytest.skip(f"There's no {CLIENTS[kind]} client")
+    sleeping = "pgrep -f '[s]leep 3607'"
+    arguments = [
+        json.dumps(serialize(machine)),
+        json.dumps(COMMUNICATORS[kind]),
+        sleeping,
+    ]
+    result = subprocess.run([sys.executable, "-c", CRASH, *arguments], check=False)
+    assert result.returncode == -signal.SIGKILL
     with shell(machine, "ssh") as ssh:
         wait_until(lambda: ssh.run(sleeping).returncode == 1, 10)
 
@@ -348,7 +383,6 @@ def test_transfer(machine: LVMachine, kind: str, tmp_path: Path) -> None:
         assert (tmp_path / f"down{i}").read_bytes() == content
 
 
-# Communicators connect (again) until the machine is up, so they need no waiting for it to boot.
 @pytest.mark.parametrize("kind", ("serial", "ssh"))
 def test_power_cycle(machine: LVMachine, kind: str) -> None:
     logging.info("Powering the machine off")
@@ -364,7 +398,6 @@ def test_power_cycle(machine: LVMachine, kind: str) -> None:
 
 def test_sniff(machine: LVMachine, network: LVNetwork) -> None:
     with network.sniffer() as sniffer:
-        # Opening it waits for the header, which tcpdump writes once it's capturing.
         _ = sniffer.pcap
         logging.info("Pinging the machine while sniffing its network")
         pings(machine.ip, 3, timeout=5, interval=1)
@@ -377,7 +410,6 @@ def test_sniff(machine: LVMachine, network: LVNetwork) -> None:
     assert len(requests) == 3
 
 
-# Where QEMU can read it.
 @pytest.fixture
 def committed() -> Iterator[Path]:
     path = MACHINES / f"susa-committed-{os.getpid()}.qcow2"
@@ -385,8 +417,6 @@ def committed() -> Iterator[Path]:
     path.unlink(missing_ok=True)
 
 
-# What's written to a machine's volume is kept by committing it, e.g. for another machine to boot from (tried on one,
-# small image).
 def test_commit(
     machine: LVMachine, volume: LVVolume, name: str, committed: Path
 ) -> None:
@@ -395,7 +425,6 @@ def test_commit(
     with shell(machine, "ssh") as ssh:
         ssh.check("echo committed > /root/susa-commit")
     logging.info("Shutting the machine down")
-    # Cleanly, so the file system is written out.
     machine.shutdown()
     wait_until(lambda: not machine.is_powered_on, BOOT_TIMEOUT)
     logging.info("Committing its volume into %s", committed)
@@ -407,8 +436,6 @@ def test_commit(
         assert ssh.check("cat /root/susa-commit") == b"committed\n"
 
 
-# A machine comes back as it was saved, running and with what it wrote, once its resources are gone (tried on one,
-# small image).
 def test_save(name: str, uri: None, tmp_path: Path) -> None:
     if name != "freebsd10":
         pytest.skip("Saving is tried on freebsd10")
@@ -431,12 +458,10 @@ def qemu(*args: str | Path) -> None:
     subprocess.run(args, check=True, capture_output=True)
 
 
-# Committing into the image backing a volume, which here is a small one of its own (others would see the change).
 def test_commit_into_backing(uri: None, tmp_path: Path) -> None:
     image = tmp_path / "image.qcow2"
     qemu("qemu-img", "create", "-f", "qcow2", image, "1M")
     with LVVolume(LVVolumeModel().backing(image).default()) as volume:
-        # What a machine would have written to it.
         written = tmp_path / "written.qcow2"
         qemu("qemu-img", "create", "-f", "qcow2", "-b", image, "-F", "qcow2", written)
         qemu("qemu-io", "-c", "write -P 0xab 0 4k", written)
