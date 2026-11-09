@@ -1,0 +1,26 @@
+<domain type="qemu">
+  <cpu mode="maximum" />
+  <devices>
+    <console type="pty" />
+    <controller index="0" type="usb" />
+    <disk device="disk" type="file">
+      <driver name="qemu" type="qcow2" />
+      <source file="/fake/cwd/somewhere" />
+      <target bus="virtio" dev="vda" />
+    </disk>
+    <graphics port="-1" type="vnc" />
+    <input bus="usb" type="tablet" />
+    <input bus="usb" type="keyboard" />
+    <video>
+      <model type="virtio" />
+    </video>
+  </devices>
+  <features>
+    <acpi />
+    <gic version="3" />
+  </features>
+  <name>test</name>
+  <os>
+    <type arch="aarch64" machine="virt">hvm</type>
+  </os>
+</domain>

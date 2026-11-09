@@ -1,0 +1,24 @@
+<domain type="qemu">
+  <devices>
+    <console type="pty" />
+    <controller index="0" type="usb">
+      <address bus="0" domain="0" function="0" slot="11" type="pci" />
+    </controller>
+    <disk device="disk" type="file">
+      <driver name="qemu" type="qcow2" />
+      <source file="/fake/cwd/somewhere" />
+      <target bus="ide" dev="hda" />
+    </disk>
+    <graphics port="-1" type="vnc" />
+    <input bus="usb" type="tablet" />
+    <input bus="usb" type="keyboard" />
+    <video>
+      <model type="cirrus" />
+    </video>
+  </devices>
+  <features />
+  <name>test</name>
+  <os>
+    <type arch="mips" machine="malta">hvm</type>
+  </os>
+</domain>

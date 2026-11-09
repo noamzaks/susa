@@ -1,0 +1,42 @@
+<domain type="qemu">
+  <devices>
+    <console type="pty" />
+    <controller index="0" type="usb" />
+    <disk device="disk" type="file">
+      <driver name="qemu" type="qcow2" />
+      <source file="/fake/cwd/somewhere" />
+      <target bus="sata" dev="sda" />
+    </disk>
+    <disk device="disk" type="file">
+      <driver name="qemu" type="qcow2" />
+      <source file="/fake/cwd/somewhere" />
+      <target bus="sata" dev="sdb" />
+    </disk>
+    <graphics port="-1" type="vnc" />
+    <input bus="usb" type="tablet" />
+    <input bus="usb" type="keyboard" />
+    <interface type="network">
+      <mac address="52:54:00:12:34:56" />
+      <model type="e1000" />
+      <source network="test" />
+    </interface>
+    <video>
+      <model type="virtio" />
+    </video>
+  </devices>
+  <features>
+    <acpi />
+  </features>
+  <memory unit="B">4294967296</memory>
+  <name>test</name>
+  <os firmware="efi">
+    <cmdline>console=ttyS0 root=/dev/sda1</cmdline>
+    <firmware>
+      <feature enabled="no" name="secure-boot" />
+    </firmware>
+    <initrd>/fake/cwd/initrd.gz</initrd>
+    <kernel>/fake/cwd/vmlinux</kernel>
+    <type arch="x86_64" machine="q35">hvm</type>
+  </os>
+  <vcpu>2</vcpu>
+</domain>

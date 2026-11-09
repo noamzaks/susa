@@ -1,0 +1,58 @@
+from __future__ import annotations
+
+import platform
+from dataclasses import dataclass
+from pathlib import Path
+
+
+@dataclass(frozen=True)
+class ArchDefaults:
+    machine: str
+    disk_bus: str
+    acpi: bool = True
+    gic: bool = False
+    tcg_cpu: str | None = None
+    video: str = "virtio"
+    qemu_args: tuple[str, ...] = ()
+
+    nic: str = "e1000"
+    pci_slots: tuple[int, ...] | None = None
+
+
+ARCH_DEFAULTS: dict[str, ArchDefaults] = {
+    "x86_64": ArchDefaults("q35", disk_bus="sata"),
+    "aarch64": ArchDefaults(
+        "virt", gic=True, tcg_cpu="maximum", disk_bus="virtio", nic="virtio"
+    ),
+    "mips": ArchDefaults(
+        "malta",
+        acpi=False,
+        video="cirrus",
+        disk_bus="ide",
+        pci_slots=(11, 12),
+    ),
+    "ppc64le": ArchDefaults("pseries", acpi=False, video="vga", disk_bus="virtio"),
+    "armv7l": ArchDefaults(
+        "virt",
+        acpi=False,
+        qemu_args=("-machine", "virt,highmem=off"),
+        disk_bus="virtio",
+    ),
+    "riscv64": ArchDefaults("virt", disk_bus="virtio", nic="virtio"),
+    "i686": ArchDefaults(
+        "q35",
+        qemu_args=("-cpu", "qemu32,family=4"),
+        disk_bus="sata",
+    ),
+}
+
+
+def host_arch() -> str:
+    machine = platform.machine()
+    return {"arm64": "aarch64", "amd64": "x86_64", "AMD64": "x86_64"}.get(
+        machine, machine
+    )
+
+
+def have_kvm(arch: str) -> bool:
+    return arch == host_arch() and Path("/dev/kvm").exists()

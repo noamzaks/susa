@@ -1,0 +1,22 @@
+[project]
+name = "susa-libvirt"
+version = "0.1.0"
+description = "SUSA's machines, networks and volumes on libvirt"
+authors = [
+    { name = "Noam Zaks", email = "noam@noamzaks.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "susa-core",
+    "typing-extensions>=4.16.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.7,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "susa.libvirt"
+
+[tool.uv.sources]
+susa-core = { workspace = true }

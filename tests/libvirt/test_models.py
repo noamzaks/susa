@@ -1,0 +1,312 @@
+from __future__ import annotations
+
+import platform
+import re
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+import pytest
+from pytest_snapshot.plugin import Snapshot
+
+from susa.libvirt.arch import ARCH_DEFAULTS
+from susa.libvirt.disk_model import LVDiskModel
+from susa.libvirt.interface_model import LVInterfaceModel
+from susa.libvirt.machine_model import LVMachineModel, LVSnapshotModel
+from susa.libvirt.network_model import LVNetworkModel
+from susa.utilities.generic import GIGA
+
+MAC = "52:54:00:12:34:56"
+
+
+@pytest.fixture(autouse=True)
+def fake_host_arch(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(platform, "machine", lambda: "x86_64")
+
+
+def fake_kvm(monkeypatch: pytest.MonkeyPatch, present: bool) -> None:
+    exists = Path.exists
+
+    def fake_exists(self: Path, **kwargs: bool) -> bool:
+        return present if self == Path("/dev/kvm") else exists(self, **kwargs)
+
+    monkeypatch.setattr(Path, "exists", fake_exists)
+
+
+@pytest.fixture(autouse=True)
+def without_kvm(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_kvm(monkeypatch, False)
+
+
+@pytest.fixture(autouse=True)
+def fake_resolve(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_cwd = Path("/fake/cwd")
+
+    def resolve(self: Path, strict: bool = False) -> Path:
+        return self if self.is_absolute() else fake_cwd / self
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+
+
+def test_machine_model_empty(snapshot: Snapshot) -> None:
+    xml = LVMachineModel("test").build()
+    snapshot.assert_match(xml, "domain.xml")
+
+
+def test_network_model_empty(snapshot: Snapshot) -> None:
+    xml = LVNetworkModel("test").build()
+    snapshot.assert_match(xml, "network.xml")
+
+
+def test_interface_model_empty(snapshot: Snapshot) -> None:
+    xml = LVInterfaceModel(mac=MAC).build()
+    snapshot.assert_match(xml, "interface.xml")
+
+
+def test_disk_model_empty(snapshot: Snapshot) -> None:
+    xml = LVDiskModel().build()
+    snapshot.assert_match(xml, "disk.xml")
+
+
+def test_snapshot_model_empty(snapshot: Snapshot) -> None:
+    xml = LVSnapshotModel("test").build()
+    snapshot.assert_match(xml, "snapshot.xml")
+
+
+@pytest.mark.parametrize("arch", ARCH_DEFAULTS)
+def test_machine_model_default(snapshot: Snapshot, arch: str) -> None:
+    disk = LVDiskModel().source("somewhere")
+    xml = LVMachineModel("test").arch(arch).default().disk(disk).build()
+    snapshot.assert_match(xml, "domain.xml")
+
+
+@pytest.mark.parametrize("arch", ARCH_DEFAULTS)
+def test_machine_model_default_interface(snapshot: Snapshot, arch: str) -> None:
+    interface = LVInterfaceModel(mac=MAC)
+    LVNetworkModel("test").default().interface(interface)
+    xml = LVMachineModel("test").arch(arch).default().interface(interface).build()
+    snapshot.assert_match(xml, "domain.xml")
+
+
+def test_machine_model_default_with_kvm(
+    snapshot: Snapshot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_kvm(monkeypatch, True)
+    disk = LVDiskModel().source("somewhere")
+    xml = LVMachineModel("test").arch("x86_64").default().disk(disk).build()
+    snapshot.assert_match(xml, "domain.xml")
+
+
+@pytest.mark.parametrize(
+    ("host", "arch", "kvm", "expected"),
+    (
+        ("x86_64", "x86_64", True, "kvm"),
+        ("x86_64", "x86_64", False, "qemu"),
+        ("x86_64", "aarch64", True, "qemu"),
+        ("aarch64", "aarch64", True, "kvm"),
+        ("aarch64", "x86_64", True, "qemu"),
+        ("arm64", "aarch64", True, "kvm"),
+    ),
+)
+def test_machine_model_default_type(
+    monkeypatch: pytest.MonkeyPatch, host: str, arch: str, kvm: bool, expected: str
+) -> None:
+    monkeypatch.setattr(platform, "machine", lambda: host)
+    fake_kvm(monkeypatch, kvm)
+    domain = ET.fromstring(LVMachineModel("test").arch(arch).default().build())
+    assert domain.get("type") == expected
+    cpu = domain.find("cpu")
+    if expected == "kvm":
+        assert cpu is not None and cpu.get("mode") == "host-passthrough"
+    else:
+        assert cpu is None or cpu.get("mode") != "host-passthrough"
+
+
+def test_network_model_default(snapshot: Snapshot) -> None:
+    xml = LVNetworkModel("test").default().build()
+    snapshot.assert_match(xml, "network.xml")
+
+
+def test_interface_model_with_model(snapshot: Snapshot) -> None:
+    xml = LVInterfaceModel(mac=MAC).model("virtio").build()
+    snapshot.assert_match(xml, "interface.xml")
+
+
+@pytest.mark.parametrize("ip", ("10.0.0.1", "10.0.0.2", "10.0.0.254"))
+def test_network_model_with_ip(snapshot: Snapshot, ip: str) -> None:
+    xml = LVNetworkModel("test").default().ip(ip).build()
+    snapshot.assert_match(xml, "network.xml")
+
+
+def test_disk_model_with_source(snapshot: Snapshot) -> None:
+    xml = LVDiskModel().source("somewhere").build()
+    snapshot.assert_match(xml, "disk.xml")
+
+
+def test_machine_model_full(snapshot: Snapshot) -> None:
+    interface = LVInterfaceModel(mac=MAC)
+    LVNetworkModel("test").default().ip("10.0.0.1").interface(interface, "10.0.0.10")
+    disk = LVDiskModel().source("somewhere")
+    xml = (
+        LVMachineModel("test")
+        .arch("x86_64")
+        .default()
+        .memory(4 * GIGA)
+        .cpu(2)
+        .efi()
+        .kernel("vmlinux", "initrd.gz", "console=ttyS0 root=/dev/sda1")
+        .interface(interface)
+        .disk(disk)
+        .disk(disk)
+        .build()
+    )
+    snapshot.assert_match(xml, "domain.xml")
+
+
+def test_interface_model_random_mac() -> None:
+    macs: set[str] = set()
+    for _ in range(10):
+        mac = LVInterfaceModel().get_mac()
+        assert re.fullmatch(r"52:54:00(:[0-9a-f]{2}){3}", mac)
+        macs.add(mac)
+    assert len(macs) > 1
+
+
+def test_interface_model_parse_keeps_mac() -> None:
+    xml = LVInterfaceModel(mac=MAC).model("e1000").build()
+    assert LVInterfaceModel.parse(xml).get_mac() == MAC
+
+
+@pytest.mark.parametrize("arch", ARCH_DEFAULTS)
+def test_machine_model_interface_default_nic(arch: str) -> None:
+    machine = LVMachineModel("test").arch(arch).interface(LVInterfaceModel(mac=MAC))
+    [interface] = machine.get_interfaces()
+    assert (
+        interface.element.find(f"model[@type='{ARCH_DEFAULTS[arch].nic}']") is not None
+    )
+
+
+def test_network_model_interface_without_ip(snapshot: Snapshot) -> None:
+    interface = LVInterfaceModel(mac=MAC)
+    network = LVNetworkModel("test").default()
+    network.interface(interface)
+    assert interface.get_network() == "test"
+    snapshot.assert_match(network.build(), "network.xml")
+
+
+def test_network_model_interface_without_dhcp_rejects_ip() -> None:
+    network = LVNetworkModel("test").default().ip("10.0.0.1", dhcp=False)
+    with pytest.raises(AssertionError):
+        network.interface(LVInterfaceModel(mac=MAC), "10.0.0.10")
+
+
+def test_network_model_interface_with_ip(snapshot: Snapshot) -> None:
+    interface = LVInterfaceModel(mac=MAC)
+    network = LVNetworkModel("test").default().ip("10.0.0.1")
+    assert network.interface(interface, "10.0.0.10") is network
+    assert interface.get_network() == "test"
+    assert network.get_hosts() == {MAC: "10.0.0.10"}
+    snapshot.assert_match(network.build(), "network.xml")
+
+
+def test_network_model_interface_picks_free_ips() -> None:
+    network = LVNetworkModel("test").default().ip("10.0.0.1")
+    network.interface(LVInterfaceModel(mac="52:54:00:00:00:01"), "10.0.0.3")
+    network.interface(LVInterfaceModel(mac="52:54:00:00:00:02"))
+    network.interface(LVInterfaceModel(mac="52:54:00:00:00:03"))
+    network.interface(LVInterfaceModel(mac="52:54:00:00:00:04"))
+    assert network.get_hosts() == {
+        "52:54:00:00:00:01": "10.0.0.3",
+        "52:54:00:00:00:02": "10.0.0.2",
+        "52:54:00:00:00:03": "10.0.0.4",
+        "52:54:00:00:00:04": "10.0.0.5",
+    }
+
+
+def test_network_model_interface_picks_ip_below_gateway() -> None:
+    network = LVNetworkModel("test").default().ip("10.0.0.254")
+    network.interface(LVInterfaceModel(mac=MAC))
+    assert network.get_hosts() == {MAC: "10.0.0.1"}
+
+
+def test_network_model_interface_no_free_ip() -> None:
+    network = LVNetworkModel("test").default().ip("10.0.0.1", "255.255.255.252")
+    network.interface(LVInterfaceModel(mac="52:54:00:00:00:01"))
+    assert network.get_hosts() == {"52:54:00:00:00:01": "10.0.0.2"}
+    with pytest.raises(RuntimeError):
+        network.interface(LVInterfaceModel(mac="52:54:00:00:00:02"))
+
+
+def test_machine_model_interface_keeps_address() -> None:
+    interface = LVInterfaceModel(mac=MAC)
+    domain = LVMachineModel("test").arch("mips").default().interface(interface)
+    assert interface.element.find("address[@slot='12']") is not None
+
+    other = LVInterfaceModel.parse(interface.build())
+    address = other.element.find("address")
+    assert address is not None
+    address.set("slot", "5")
+    domain.interface(other)
+    assert address.get("slot") == "5"
+
+
+def test_interface_model_getters() -> None:
+    interface = LVInterfaceModel(mac=MAC)
+    assert interface.get_mac() == MAC
+    assert interface.get_network() is None
+
+    assert interface.network("test") is interface
+    assert interface.get_network() == "test"
+
+
+def test_network_model_getters() -> None:
+    network = LVNetworkModel("test")
+    assert network.get_name() == "test"
+    assert network.get_hosts() == {}
+    assert network.get_hosts().get(MAC) is None
+
+    network.ip("10.0.0.1")
+    assert network.get_hosts() == {}
+
+    network.interface(LVInterfaceModel(mac=MAC), "10.0.0.10")
+    network.interface(LVInterfaceModel(mac="52:54:00:00:00:01"))
+    assert network.get_hosts() == {MAC: "10.0.0.10", "52:54:00:00:00:01": "10.0.0.2"}
+    assert network.get_hosts().get(MAC) == "10.0.0.10"
+    assert network.get_hosts().get("52:54:00:00:00:02") is None
+
+
+def test_network_model_getters_after_parse() -> None:
+    network = LVNetworkModel("test").ip("10.0.0.1")
+    network.interface(LVInterfaceModel(mac=MAC), "10.0.0.10")
+    parsed = LVNetworkModel.parse(network.build())
+    assert parsed.get_name() == "test"
+    assert parsed.get_hosts().get(MAC) == "10.0.0.10"
+
+
+def test_machine_model_getters() -> None:
+    domain = LVMachineModel("test").arch("x86_64").default()
+    assert domain.get_name() == "test"
+    assert domain.get_arch() == "x86_64"
+    assert domain.get_interfaces() == []
+
+    domain.interface(LVInterfaceModel(mac=MAC)).interface(
+        LVInterfaceModel(mac="52:54:00:00:00:01")
+    )
+    assert [i.get_mac() for i in domain.get_interfaces()] == [
+        MAC,
+        "52:54:00:00:00:01",
+    ]
+
+
+def test_machine_model_get_arch_unset() -> None:
+    with pytest.raises(AssertionError):
+        LVMachineModel("test").get_arch()
+
+
+def test_snapshot_model_getters() -> None:
+    assert LVSnapshotModel("test").get_name() == "test"
+
+
+@pytest.mark.parametrize("arch", ARCH_DEFAULTS)
+def test_machine_model_parse(arch: str) -> None:
+    xml = LVMachineModel("test").arch(arch).default().qemu_args(["-cpu", "max"]).build()
+    assert LVMachineModel.parse(xml).build() == xml
