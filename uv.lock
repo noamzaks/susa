@@ -11,6 +11,7 @@ resolution-markers = [
 members = [
     "susa-communicators",
     "susa-core",
+    "susa-kubevirt",
     "susa-libvirt",
     "susa-podman",
     "susa-recipes",
@@ -1077,6 +1078,21 @@ dependencies = [
 requires-dist = [{ name = "typing-extensions", specifier = ">=4.16.0" }]
 
 [[package]]
+name = "susa-kubevirt"
+version = "0.1.0"
+source = { editable = "packages/susa-kubevirt" }
+dependencies = [
+    { name = "susa-core" },
+    { name = "typing-extensions" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "susa-core", editable = "packages/susa-core" },
+    { name = "typing-extensions", specifier = ">=4.16.0" },
+]
+
+[[package]]
 name = "susa-libvirt"
 version = "0.1.0"
 source = { editable = "packages/susa-libvirt" }
@@ -1124,6 +1140,9 @@ dependencies = [
 communicators = [
     { name = "susa-communicators" },
 ]
+kubevirt = [
+    { name = "susa-kubevirt" },
+]
 libvirt = [
     { name = "susa-libvirt" },
 ]
@@ -1136,11 +1155,12 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.14.3" },
     { name = "susa-communicators", marker = "extra == 'communicators'", editable = "packages/susa-communicators" },
     { name = "susa-core", editable = "packages/susa-core" },
+    { name = "susa-kubevirt", marker = "extra == 'kubevirt'", editable = "packages/susa-kubevirt" },
     { name = "susa-libvirt", marker = "extra == 'libvirt'", editable = "packages/susa-libvirt" },
     { name = "susa-podman", marker = "extra == 'podman'", editable = "packages/susa-podman" },
     { name = "typing-extensions", specifier = ">=4.16.0" },
 ]
-provides-extras = ["communicators", "libvirt", "podman"]
+provides-extras = ["communicators", "kubevirt", "libvirt", "podman"]
 
 [[package]]
 name = "susa-workspace"
@@ -1149,9 +1169,10 @@ source = { virtual = "." }
 dependencies = [
     { name = "susa-communicators" },
     { name = "susa-core" },
+    { name = "susa-kubevirt" },
     { name = "susa-libvirt" },
     { name = "susa-podman" },
-    { name = "susa-recipes", extra = ["communicators", "libvirt", "podman"] },
+    { name = "susa-recipes", extra = ["communicators", "kubevirt", "libvirt", "podman"] },
 ]
 
 [package.dev-dependencies]
@@ -1175,9 +1196,10 @@ dev = [
 requires-dist = [
     { name = "susa-communicators", editable = "packages/susa-communicators" },
     { name = "susa-core", editable = "packages/susa-core" },
+    { name = "susa-kubevirt", editable = "packages/susa-kubevirt" },
     { name = "susa-libvirt", editable = "packages/susa-libvirt" },
     { name = "susa-podman", editable = "packages/susa-podman" },
-    { name = "susa-recipes", extras = ["communicators", "libvirt", "podman"], editable = "packages/susa-recipes" },
+    { name = "susa-recipes", extras = ["communicators", "kubevirt", "libvirt", "podman"], editable = "packages/susa-recipes" },
 ]
 
 [package.metadata.requires-dev]
