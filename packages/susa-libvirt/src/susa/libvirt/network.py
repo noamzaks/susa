@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import re
+import shlex
+
 from typing_extensions import override
 
+from susa.core.communicator import AsyncCommandRunner
 from susa.core.interface import BasicInterface, Interface
-from susa.core.network import Network
+from susa.core.network import CommandSniffer, Network, Sniffable
 from susa.libvirt._virsh import virsh, virsh_guarded, virsh_xml
 from susa.libvirt.entity import LVEntity
 from susa.libvirt.network_model import LVNetworkModel
 
 
-class LVNetwork(LVEntity[LVNetworkModel], Network):
+class LVNetwork(LVEntity[LVNetworkModel], Network, Sniffable):
     def __init__(self, model: LVNetworkModel) -> None:
         super().__init__(model)
 
@@ -32,3 +36,16 @@ class LVNetwork(LVEntity[LVNetworkModel], Network):
     def destroy(self) -> None:
         virsh("net-destroy", self.name)
         self.guard.cancel()
+
+    @override
+    def sniffer(self) -> LVSniffer:
+        match = re.search(
+            r"^Bridge:\s+(\S+)", virsh("net-info", self.name), re.MULTILINE
+        )
+        assert match is not None
+        return LVSniffer(match[1])
+
+
+class LVSniffer(CommandSniffer):
+    def __init__(self, interface: str, host: AsyncCommandRunner | None = None) -> None:
+        super().__init__(f"tcpdump -i {shlex.quote(interface)} -U -w -", host)

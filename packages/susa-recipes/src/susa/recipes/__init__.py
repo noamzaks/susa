@@ -15,6 +15,10 @@ from typing_extensions import NotRequired, Self, TypedDict, TypeGuard
 PACKAGES = {
     "susa.utilities": ["susa.utilities.networking.SubnetReservation"],
     "susa.communicators": [
+        "susa.communicators.serial.SerialCommunicator",
+        "susa.communicators.ssh.SSHCommunicator",
+        "susa.communicators.telnet.TelnetCommunicator",
+        "susa.communicators.rlogin.RloginCommunicator",
         "susa.communicators.unix.UnixCommunicator",
         "susa.communicators.container.ContainerCommunicator",
     ],

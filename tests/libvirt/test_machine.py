@@ -1,0 +1,403 @@
+from __future__ import annotations
+
+import contextlib
+import json
+import logging
+import random
+import shutil
+import signal
+import subprocess
+import sys
+import time
+from collections.abc import Callable, Generator, Iterator, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import pytest
+from scapy.layers.inet import ICMP, IP
+
+from susa.communicators.shell import ShellCommunicator
+from susa.communicators.unix import UnixCommunicator
+from susa.core.communicator import FileTransferrer
+from susa.core.machine import wait_until_booted
+from susa.core.resource import Resource
+from susa.core.serializable import serialize
+from susa.libvirt import (
+    LVMachine,
+    LVNetwork,
+    LVSnapshot,
+    LVVolume,
+)
+from susa.libvirt._virsh import LVURI
+from susa.recipes import Recipe
+from susa.recipes.session import Session
+from susa.utilities.generic import GIGA, wait_until
+from susa.utilities.networking import ping, pings
+
+MACHINES = Path("/machines")
+MACHINE_MODEL = "susa.libvirt.machine_model.LVMachineModel"
+NETWORK_MODEL = "susa.libvirt.network_model.LVNetworkModel"
+VOLUME_MODEL = "susa.libvirt.volume_model.LVVolumeModel"
+SUBNET = "susa.utilities.networking.SubnetReservation"
+LV_NETWORK = "susa.libvirt.network.LVNetwork"
+LV_VOLUME = "susa.libvirt.volume.LVVolume"
+LV_MACHINE = "susa.libvirt.machine.LVMachine"
+BOOT_TIMEOUT = 300
+QUIET_TIME = 5
+
+
+@dataclass(frozen=True)
+class Image:
+    path: Path
+    steps: list[Any]
+
+    def session(self, path: Path | None = None) -> list[dict[str, Any]]:
+        machine = [
+            *self.steps,
+            "default",
+            {"memory": 2 * GIGA},
+            {"volume": {"$ref": "volume_model"}},
+            {"network": {"$ref": "network_model"}},
+        ]
+        return [
+            {"subnet": {SUBNET: {}}},
+            {
+                "network_model": {
+                    NETWORK_MODEL: ["default", {"ip": {"$ref": "subnet.ip"}}]
+                }
+            },
+            {"volume_model": {VOLUME_MODEL: [{"backing": str(path or self.path)}]}},
+            {"machine_model": {MACHINE_MODEL: machine}},
+            {"network": {LV_NETWORK: {"model": {"$ref": "network_model"}}}},
+            {"volume": {LV_VOLUME: {"model": {"$ref": "volume_model"}}}},
+            {"machine": {LV_MACHINE: {"model": {"$ref": "machine_model"}}}},
+        ]
+
+
+IMAGES = {
+    "x86_64": Image(
+        MACHINES / "debian_x86_64.qcow2", [{"arch": "x86_64"}, {"cpu": 2}, "efi"]
+    ),
+    "aarch64": Image(
+        MACHINES / "debian_aarch64.qcow2", [{"arch": "aarch64"}, {"cpu": 2}, "efi"]
+    ),
+    "mips": Image(
+        MACHINES / "debian_mips.qcow2",
+        [
+            {"arch": "mips"},
+            {"cpu": 1},
+            {
+                "kernel": {
+                    "kernel": "/machines/debian-mips-boot/vmlinux-4.19.0-21-4kc-malta",
+                    "initrd": "/machines/debian-mips-boot/initrd.img-4.19.0-21-4kc-malta",
+                    "cmdline": "root=/dev/sda1 console=tty0 console=ttyS0",
+                }
+            },
+        ],
+    ),
+    "ppc64le": Image(
+        MACHINES / "debian_ppc64le.qcow2", [{"arch": "ppc64le"}, {"cpu": 2}]
+    ),
+    "armv7l": Image(
+        MACHINES / "debian_armv7l.qcow2",
+        [
+            {"arch": "armv7l"},
+            {"cpu": 1},
+            {
+                "kernel": {
+                    "kernel": "/machines/debian-armhf-boot/vmlinuz-6.12.107+deb13-armmp",
+                    "initrd": "/machines/debian-armhf-boot/initrd.img-6.12.107+deb13-armmp",
+                    "cmdline": "root=/dev/vda1 rw console=tty0 console=ttyAMA0 net.ifnames=0",
+                }
+            },
+        ],
+    ),
+    "riscv64": Image(
+        MACHINES / "debian_riscv64.qcow2",
+        [
+            {"arch": "riscv64"},
+            {"cpu": 2},
+            {
+                "kernel": {
+                    "kernel": "/machines/debian-riscv64-boot/vmlinuz-6.12.107+deb13-riscv64",
+                    "initrd": "/machines/debian-riscv64-boot/initrd.img-6.12.107+deb13-riscv64",
+                    "cmdline": "root=/dev/vda3 rw console=tty0 console=ttyS0",
+                }
+            },
+        ],
+    ),
+    "i386": Image(MACHINES / "debian_i386.qcow2", [{"arch": "i686"}, {"cpu": 2}]),
+    "freebsd": Image(
+        MACHINES / "freebsd_x86_64.qcow2", [{"arch": "x86_64"}, {"cpu": 2}]
+    ),
+    "freebsd10": Image(
+        MACHINES / "freebsd10_x86_64.qcow2", [{"arch": "x86_64"}, {"cpu": 2}]
+    ),
+}
+
+LOGIN = {"ip": {"$ref": "machine.ip"}, "username": "root", "password": "a"}
+COMMUNICATORS: dict[str, dict[str, Any]] = {
+    "serial": {
+        "susa.communicators.serial.SerialCommunicator": {
+            "machine": {"$ref": "machine"},
+            "login": {"username": "root", "password": "a"},
+        }
+    },
+    "ssh": {"susa.communicators.ssh.SSHCommunicator": LOGIN},
+    "ssh-scp": {
+        "susa.communicators.ssh.SSHCommunicator": {**LOGIN, "file_transfer": "scp"}
+    },
+    "telnet": {"susa.communicators.telnet.TelnetCommunicator": LOGIN},
+    "rlogin": {"susa.communicators.rlogin.RloginCommunicator": LOGIN},
+}
+
+
+def boot(machine: LVMachine) -> None:
+    wait_until_booted(machine, BOOT_TIMEOUT, QUIET_TIME)
+
+
+@pytest.fixture(scope="session")
+def uri() -> Iterator[None]:
+    with LVURI.set("qemu:///system"):
+        yield
+
+
+@pytest.fixture(
+    scope="module",
+    params=[pytest.param(n, marks=pytest.mark.xdist_group(n)) for n in IMAGES],
+)
+def name(request: pytest.FixtureRequest) -> str:
+    result: str = request.param
+    return result
+
+
+@pytest.fixture(scope="module")
+def session(name: str, uri: None) -> Iterator[Session]:
+    image = IMAGES[name]
+    if not image.path.exists():
+        pytest.skip(f"{image.path} doesn't exist")
+    with Session.model_validate({"objects": image.session()}) as session:
+        boot(session.get("machine", LVMachine))
+        yield session
+
+
+@pytest.fixture(scope="module")
+def ready(session: Session) -> Iterator[LVSnapshot]:
+    logging.info("Snapshotting the booted machine")
+    with session.get("machine", LVMachine).snapshot() as snapshot:
+        yield snapshot
+
+
+@pytest.fixture
+def machine(
+    session: Session,
+    ready: LVSnapshot,
+    save_if_failed: Callable[[Sequence[Resource]], None],
+) -> Iterator[LVMachine]:
+    yield session.get("machine", LVMachine)
+    save_if_failed(session.all(Resource))
+    logging.info("Reverting the machine to its snapshot")
+    ready.revert()
+
+
+@pytest.fixture
+def network(session: Session) -> LVNetwork:
+    return session.get("network", LVNetwork)
+
+
+@pytest.fixture
+def volume(session: Session) -> LVVolume:
+    return session.get("volume", LVVolume)
+
+
+def test_ping(machine: LVMachine) -> None:
+    assert ping(machine.ip, timeout=5) is not None
+
+
+def test_screenshot(machine: LVMachine) -> None:
+    screenshot = machine.screenshot()
+    assert screenshot.data.startswith((b"\x89PNG\r\n\x1a\n", b"P6"))
+
+
+def test_serial(machine: LVMachine) -> None:
+    with machine.serial() as serial:
+        serial.write(b"\r")
+        assert serial.read(timeout=30)
+        serial.wait_until_quiet(QUIET_TIME, 60)
+
+        serial.write(b"\r")
+        assert len(serial.read(1, timeout=30)) == 1
+        assert serial.read(timeout=30)
+
+
+@contextlib.contextmanager
+def shell(machine: LVMachine, kind: str) -> Generator[ShellCommunicator, None, None]:
+    if shutil.which(CLIENTS.get(kind, "true")) is None:
+        pytest.skip(f"There's no {CLIENTS[kind]} client")
+    result: ShellCommunicator = Recipe.model_validate(COMMUNICATORS[kind]).make(
+        machine=machine
+    )
+    logging.info("Connecting over %s", kind)
+    with result:
+        yield result
+
+
+@contextlib.contextmanager
+def unix(machine: LVMachine, kind: str) -> Generator[UnixCommunicator, None, None]:
+    with shell(machine, kind) as communicator, UnixCommunicator(communicator) as u:
+        yield u
+
+
+@contextlib.contextmanager
+def transferrer(
+    machine: LVMachine, kind: str
+) -> Generator[FileTransferrer, None, None]:
+    if kind in ("ssh", "ssh-scp"):
+        with shell(machine, kind) as ssh:
+            assert isinstance(ssh, FileTransferrer)
+            yield ssh
+    else:
+        with unix(machine, kind.removesuffix("-unix")) as u:
+            yield u
+
+
+CLIENTS = {"telnet": "telnet", "rlogin": "rlogin"}
+SHELLS = ("serial", "ssh", "telnet", "rlogin")
+TRANSFERRERS = ("serial", "ssh", "ssh-scp", "ssh-unix", "telnet", "rlogin")
+UNAME = {name: name for name in IMAGES} | {
+    "i386": "i486",
+    "freebsd": "amd64",
+    "freebsd10": "amd64",
+}
+
+
+@pytest.mark.parametrize("kind", SHELLS)
+def test_uname(machine: LVMachine, name: str, kind: str) -> None:
+    with unix(machine, kind) as u:
+        result = u.run("uname -m")
+        assert (result.returncode, result.stdout, result.stderr) == (
+            0,
+            f"{UNAME[name]}\n".encode(),
+            b"",
+        )
+
+
+@pytest.mark.parametrize("kind", SHELLS)
+def test_run(machine: LVMachine, kind: str) -> None:
+    with unix(machine, kind) as u:
+        result = u.run("echo a; echo b >&2; false")
+        assert (result.returncode, result.stdout, result.stderr) == (1, b"a\n", b"b\n")
+        assert u.communicator.check("cd /tmp; pwd") == b"/tmp\n"
+        assert u.communicator.check("pwd") == b"/tmp\n"
+
+
+@pytest.mark.parametrize("kind", SHELLS)
+def test_start(machine: LVMachine, kind: str) -> None:
+    with unix(machine, kind) as u:
+        command = u.start("echo started; sleep 2; echo done >&2")
+        assert command.stdout.read_until(b"started\n", timeout=10) == b"started\n"
+        assert command.poll() is None
+        assert command.wait() == 0
+        assert command.stderr.read() == b"done\n"
+
+
+@pytest.mark.parametrize("kind", SHELLS)
+def test_disconnect(machine: LVMachine, kind: str) -> None:
+    sleeping = "pgrep -f '[s]leep 3606'"
+    with unix(machine, kind) as u:
+        u.start("sleep 3606; true")
+        wait_until(lambda: u.communicator.run(sleeping).returncode == 0, 10)
+    with shell(machine, "ssh") as ssh:
+        wait_until(lambda: ssh.run(sleeping).returncode == 1, 10)
+
+
+def test_kill(machine: LVMachine) -> None:
+    sleeping = "pgrep -f '[s]leep 3608'"
+    with shell(machine, "ssh") as ssh:
+        with UnixCommunicator(ssh) as u:
+            command = u.start("sleep 3608; true")
+            wait_until(lambda: ssh.run(sleeping).returncode == 0, 10)
+            command.kill()
+            assert command.wait(10) != 0
+            assert ssh.run(sleeping).returncode == 1
+            u.start("sleep 3608; true")
+            wait_until(lambda: ssh.run(sleeping).returncode == 0, 10)
+        assert ssh.run(sleeping).returncode == 1
+
+
+CRASH = """
+import json, os, signal, sys
+from susa.communicators.unix import UnixCommunicator
+from susa.core.serializable import deserialize
+from susa.recipes import Recipe
+from susa.utilities.generic import wait_until
+
+machine = deserialize(json.loads(sys.argv[1]))
+communicator = Recipe.model_validate(json.loads(sys.argv[2])).make(machine=machine)
+communicator.create()
+unix = UnixCommunicator(communicator)
+unix.create()
+unix.start("sleep 3607; true")
+wait_until(lambda: communicator.run(sys.argv[3]).returncode == 0, 10)
+os.kill(os.getpid(), signal.SIGKILL)
+"""
+
+
+@pytest.mark.parametrize("kind", SHELLS)
+def test_crash(machine: LVMachine, kind: str) -> None:
+    if shutil.which(CLIENTS.get(kind, "true")) is None:
+        pytest.skip(f"There's no {CLIENTS[kind]} client")
+    sleeping = "pgrep -f '[s]leep 3607'"
+    arguments = [
+        json.dumps(serialize(machine)),
+        json.dumps(COMMUNICATORS[kind]),
+        sleeping,
+    ]
+    result = subprocess.run([sys.executable, "-c", CRASH, *arguments], check=False)
+    assert result.returncode == -signal.SIGKILL
+    with shell(machine, "ssh") as ssh:
+        wait_until(lambda: ssh.run(sleeping).returncode == 1, 10)
+
+
+@pytest.mark.parametrize("kind", TRANSFERRERS)
+def test_transfer(machine: LVMachine, kind: str, tmp_path: Path) -> None:
+    data = [random.randbytes(5000) for _ in range(3)]
+    for i, content in enumerate(data):
+        (tmp_path / f"up{i}").write_bytes(content)
+    with transferrer(machine, kind) as t:
+        logging.info("Transferring a file each way")
+        t.upload_single(tmp_path / "up0", "/tmp/susa0")
+        t.download_single("/tmp/susa0", tmp_path / "down0")
+        logging.info("Transferring two files each way")
+        t.upload({tmp_path / f"up{i}": f"/tmp/susa{i}" for i in (1, 2)})
+        t.download({f"/tmp/susa{i}": tmp_path / f"down{i}" for i in (1, 2)})
+    for i, content in enumerate(data):
+        assert (tmp_path / f"down{i}").read_bytes() == content
+
+
+@pytest.mark.parametrize("kind", ("serial", "ssh"))
+def test_power_cycle(machine: LVMachine, kind: str) -> None:
+    logging.info("Powering the machine off")
+    machine.power_off()
+    assert not machine.is_powered_on
+
+    logging.info("Powering the machine on")
+    machine.power_on()
+    assert machine.is_powered_on
+    with shell(machine, kind) as s:
+        assert s.check("echo up") == b"up\n"
+
+
+def test_sniff(machine: LVMachine, network: LVNetwork) -> None:
+    with network.sniffer() as sniffer:
+        _ = sniffer.pcap
+        logging.info("Pinging the machine while sniffing its network")
+        pings(machine.ip, 3, timeout=5, interval=1)
+        time.sleep(1)
+    requests = [
+        p
+        for p in sniffer.packets()
+        if ICMP in p and p[ICMP].type == 8 and p[IP].dst == machine.ip
+    ]
+    assert len(requests) == 3

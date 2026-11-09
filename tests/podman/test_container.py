@@ -10,16 +10,26 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from scapy.layers.inet import ICMP
 
 from susa.communicators.container import ContainerCommunicator
+from susa.communicators.rlogin import RloginCommunicator
+from susa.communicators.ssh import SSHCommunicator
+from susa.communicators.telnet import TelnetCommunicator
 from susa.core.communicator import HOST
 from susa.libvirt import (
     LVURI,
+    LVMachine,
+    LVMachineModel,
+    LVNetwork,
+    LVNetworkModel,
+    LVVolume,
+    LVVolumeModel,
 )
 from susa.libvirt.arch import host_arch
 from susa.podman.container import LibvirtContainer
-from susa.utilities.generic import wait_until
-from susa.utilities.networking import SubnetReservation
+from susa.utilities.generic import GIGA, wait_until
+from susa.utilities.networking import SubnetReservation, pings
 
 IMAGE = Path(f"/machines/debian_{host_arch()}.qcow2")
 ENVIRONMENT = ("SUSA_HOST", "SUSA_LVURI", "SUSA_SUBNETS_LOCK")
@@ -60,6 +70,38 @@ print(virsh("uri").strip())
     output = subprocess.check_output([sys.executable, "-c", code]).decode()
     lock, uri = SubnetReservation.LOCK.get(), LVURI.get()
     assert output.splitlines() == [str(vars(host)), str(lock), uri]
+
+
+def test_container(container: LibvirtContainer) -> None:
+    with SubnetReservation() as subnet:
+        network_model = LVNetworkModel().default().ip(subnet.ip)
+        volume_model = LVVolumeModel().backing(IMAGE)
+        machine_model = (
+            LVMachineModel()
+            .arch(host_arch())
+            .efi()
+            .default()
+            .memory(2 * GIGA)
+            .volume(volume_model)
+            .network(network_model)
+        )
+        with (
+            LVNetwork(network_model) as network,
+            LVVolume(volume_model),
+            LVMachine(machine_model) as machine,
+            SSHCommunicator(machine.ip, "root", "a") as ssh,
+        ):
+            assert ssh.check("uname -m").decode().strip() == host_arch()
+            for shell in (TelnetCommunicator, RloginCommunicator):
+                logging.info("Connecting with %s", shell.__name__)
+                with shell(machine.ip, "root", "a") as communicator:
+                    assert communicator.check("echo up") == b"up\n"
+            with network.sniffer() as sniffer:
+                _ = sniffer.pcap
+                logging.info("Pinging the machine while sniffing its network")
+                assert None not in pings(machine.ip, 2, timeout=5, interval=0.5)
+                time.sleep(1)
+            assert sum(ICMP in packet for packet in sniffer.packets()) >= 4
 
 
 def sleeping(seconds: int) -> bool:

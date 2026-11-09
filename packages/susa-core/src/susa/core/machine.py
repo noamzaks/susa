@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import logging
 import shlex
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
@@ -13,7 +15,9 @@ from typing_extensions import override
 from susa.core.communicator import HOST, AsyncCommandRunner, AsyncCommandStream
 from susa.core.interface import Interface
 from susa.core.resource import Resource
-from susa.core.stream import InputOutputStream
+from susa.core.stream import InputOutputStream, SavedOutputStream
+from susa.utilities.generic import Deadline
+from susa.utilities.networking import wait_until_ping
 
 if TYPE_CHECKING:
     from PIL.ImageFile import ImageFile
@@ -148,3 +152,27 @@ class CommandSerial(AsyncCommandStream, Serial):
 class SerialAccessible(ABC):
     @abstractmethod
     def serial(self) -> Serial: ...
+
+
+def wait_until_booted(
+    machine: Machine,
+    timeout: float | None = None,
+    quiet_time: float = 5,
+    host: AsyncCommandRunner | None = None,
+) -> None:
+    assert isinstance(machine, SerialAccessible)
+    with machine.serial() as serial:
+        console = SavedOutputStream(serial)
+        deadline = Deadline(timeout)
+        try:
+            logging.info(
+                "Waiting for %s to answer pings at %s", machine.name, machine.ip
+            )
+            wait_until_ping(machine.ip, deadline.remaining(), host)
+            logging.info("Waiting for %s's console to be quiet", machine.name)
+            console.wait_until_quiet(quiet_time, deadline.remaining())
+        except (TimeoutError, EOFError) as e:
+            with contextlib.suppress(EOFError):
+                console.read()
+            output = console.data.decode(errors="backslashreplace")
+            raise TimeoutError(f"{machine.name} didn't boot: {e}\n{output}") from e

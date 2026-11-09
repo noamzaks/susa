@@ -10,16 +10,19 @@ from typing_extensions import override
 from susa.core.interface import BasicInterface, Interface
 from susa.core.keyboard import Key, KeyPressable
 from susa.core.machine import (
+    CommandSerial,
     Machine,
     Powerable,
     Screenshot,
     Screenshottable,
+    SerialAccessible,
     Snapshot,
     Snapshottable,
 )
 from susa.core.serializable import JSON, deserialize, serialize
 from susa.libvirt._virsh import (
     virsh,
+    virsh_command,
     virsh_guarded,
     virsh_xml,
 )
@@ -76,6 +79,7 @@ class LVMachine(
     Snapshottable,
     Powerable,
     Screenshottable,
+    SerialAccessible,
     KeyPressable,
 ):
     def __init__(self, model: LVMachineModel) -> None:
@@ -143,6 +147,10 @@ class LVMachine(
             match = re.search(r"type of (\S+)", output)
             assert match is not None, output
             return Screenshot(file.read_bytes(), match[1])
+
+    @override
+    def serial(self) -> CommandSerial:
+        return CommandSerial(virsh_command("console", self.name))
 
     @override
     def press(self, keys: Sequence[Key], hold_time: float = 0.1) -> None:
