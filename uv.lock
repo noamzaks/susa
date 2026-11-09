@@ -12,6 +12,7 @@ members = [
     "susa-communicators",
     "susa-core",
     "susa-libvirt",
+    "susa-podman",
     "susa-workspace",
 ]
 
@@ -916,6 +917,25 @@ requires-dist = [
 ]
 
 [[package]]
+name = "susa-podman"
+version = "0.1.0"
+source = { editable = "packages/susa-podman" }
+dependencies = [
+    { name = "susa-communicators" },
+    { name = "susa-core" },
+    { name = "susa-libvirt" },
+    { name = "typing-extensions" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "susa-communicators", editable = "packages/susa-communicators" },
+    { name = "susa-core", editable = "packages/susa-core" },
+    { name = "susa-libvirt", editable = "packages/susa-libvirt" },
+    { name = "typing-extensions", specifier = ">=4.16.0" },
+]
+
+[[package]]
 name = "susa-workspace"
 version = "0.1.0"
 source = { virtual = "." }
@@ -923,6 +943,7 @@ dependencies = [
     { name = "susa-communicators" },
     { name = "susa-core" },
     { name = "susa-libvirt" },
+    { name = "susa-podman" },
 ]
 
 [package.dev-dependencies]
@@ -947,6 +968,7 @@ requires-dist = [
     { name = "susa-communicators", editable = "packages/susa-communicators" },
     { name = "susa-core", editable = "packages/susa-core" },
     { name = "susa-libvirt", editable = "packages/susa-libvirt" },
+    { name = "susa-podman", editable = "packages/susa-podman" },
 ]
 
 [package.metadata.requires-dev]
