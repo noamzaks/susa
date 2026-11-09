@@ -1,0 +1,15 @@
+repos:
+    - repo: https://github.com/astral-sh/ruff-pre-commit
+      rev: v0.17.4
+      hooks:
+          - id: ruff-check
+          - id: ruff-format
+    # Run mypy from the project's environment, so it sees the real (typed) dependencies.
+    - repo: local
+      hooks:
+          - id: mypy
+            name: mypy
+            entry: uv run mypy
+            language: system
+            types: [python]
+            pass_filenames: false
