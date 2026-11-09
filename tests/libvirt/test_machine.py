@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
 import random
 import shutil
 import signal
@@ -29,8 +30,9 @@ from susa.libvirt import (
     LVNetwork,
     LVSnapshot,
     LVVolume,
+    LVVolumeModel,
 )
-from susa.libvirt._virsh import LVURI
+from susa.libvirt._virsh import LVURI, virsh
 from susa.recipes import Recipe
 from susa.recipes.session import Session
 from susa.utilities.generic import GIGA, wait_until
@@ -68,7 +70,11 @@ class Image:
                     NETWORK_MODEL: ["default", {"ip": {"$ref": "subnet.ip"}}]
                 }
             },
-            {"volume_model": {VOLUME_MODEL: [{"backing": str(path or self.path)}]}},
+            {
+                "volume_model": {
+                    VOLUME_MODEL: [{"backing": str(path or self.path)}, "default"]
+                }
+            },
             {"machine_model": {MACHINE_MODEL: machine}},
             {"network": {LV_NETWORK: {"model": {"$ref": "network_model"}}}},
             {"volume": {LV_VOLUME: {"model": {"$ref": "volume_model"}}}},
@@ -404,6 +410,32 @@ def test_sniff(machine: LVMachine, network: LVNetwork) -> None:
     assert len(requests) == 3
 
 
+@pytest.fixture
+def committed() -> Iterator[Path]:
+    path = MACHINES / f"susa-committed-{os.getpid()}.qcow2"
+    yield path
+    path.unlink(missing_ok=True)
+
+
+def test_commit(
+    machine: LVMachine, volume: LVVolume, name: str, committed: Path
+) -> None:
+    if name != "freebsd10":
+        pytest.skip("Committing is tried on freebsd10")
+    with shell(machine, "ssh") as ssh:
+        ssh.check("echo committed > /root/susa-commit")
+    logging.info("Shutting the machine down")
+    machine.shutdown()
+    wait_until(lambda: not machine.is_powered_on, BOOT_TIMEOUT)
+    logging.info("Committing its volume into %s", committed)
+    volume.commit(str(committed))
+    recipe = [*IMAGES[name].session(committed), {"ssh": COMMUNICATORS["ssh"]}]
+    logging.info("Booting a machine from the committed image")
+    with Session.model_validate({"objects": recipe}) as session:
+        ssh = session.get("ssh", ShellCommunicator)
+        assert ssh.check("cat /root/susa-commit") == b"committed\n"
+
+
 def test_save(name: str, uri: None, tmp_path: Path) -> None:
     if name != "freebsd10":
         pytest.skip("Saving is tried on freebsd10")
@@ -420,3 +452,26 @@ def test_save(name: str, uri: None, tmp_path: Path) -> None:
         with shell(machine, "ssh") as ssh:
             assert ssh.check("cat /root/susa-save") == b"saved\n"
             assert ssh.check("sysctl -n kern.boottime") == booted
+
+
+def qemu(*args: str | Path) -> None:
+    subprocess.run(args, check=True, capture_output=True)
+
+
+def test_commit_into_backing(uri: None, tmp_path: Path) -> None:
+    image = tmp_path / "image.qcow2"
+    qemu("qemu-img", "create", "-f", "qcow2", image, "1M")
+    with LVVolume(LVVolumeModel().backing(image).default()) as volume:
+        written = tmp_path / "written.qcow2"
+        qemu("qemu-img", "create", "-f", "qcow2", "-b", image, "-F", "qcow2", written)
+        qemu("qemu-io", "-c", "write -P 0xab 0 4k", written)
+        virsh(
+            "vol-upload",
+            "--pool",
+            volume.model.get_pool(),
+            volume.model.get_name(),
+            str(written),
+        )
+
+        volume.commit()
+    qemu("qemu-io", "-c", "read -P 0xab 0 4k", image)

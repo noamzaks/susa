@@ -4,6 +4,7 @@ from pathlib import Path
 
 from typing_extensions import Self, override
 
+from susa.core.communicator import HOST, CommandRunner
 from susa.core.serializable import JSON
 from susa.libvirt.model import LVModel, child, node, put
 from susa.utilities.generic import random_id
@@ -35,6 +36,15 @@ class LVVolumeModel(LVModel):
 
         return self
 
+    def owner(self, uid: int, gid: int) -> Self:
+        permissions = node(
+            "permissions",
+            elements=[node("owner", text=str(uid)), node("group", text=str(gid))],
+        )
+        put(child(self.element, "target"), permissions)
+
+        return self
+
     def backing(self, image: str | Path) -> Self:
         put(
             self.element,
@@ -48,6 +58,10 @@ class LVVolumeModel(LVModel):
         )
 
         return self
+
+    def default(self, host: CommandRunner | None = None) -> Self:
+        host = host or HOST.get()
+        return self.owner(int(host.check("id -u")), int(host.check("id -g")))
 
     @override
     def __getstate__(self) -> JSON:
