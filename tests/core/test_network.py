@@ -1,0 +1,48 @@
+from __future__ import annotations
+
+import sys
+from io import BytesIO
+
+import pytest
+from scapy.layers.inet import ICMP, IP
+from scapy.layers.l2 import Ether
+from scapy.packet import Packet
+from scapy.utils import PcapWriter
+from typing_extensions import override
+
+from susa.core.network import CommandSniffer, Sniffer
+
+
+class FakeSniffer(Sniffer):
+    def __init__(self, data: bytes, chunk: int) -> None:
+        self.chunks = [data[i : i + chunk] for i in range(0, len(data), chunk)]
+
+    @override
+    def create(self) -> None: ...
+
+    @override
+    def destroy(self) -> None: ...
+
+    @override
+    def read(self, size: int | None = None, timeout: float | None = 0) -> bytes:
+        if not self.chunks:
+            raise EOFError
+        return self.chunks.pop(0)
+
+
+def test_packets() -> None:
+    sent: list[Packet] = [Ether() / IP(dst=f"10.0.0.{i}") / ICMP() for i in range(3)]
+    pcap = BytesIO()
+    writer = PcapWriter(pcap)
+    writer.write(sent)
+    writer.flush()
+
+    sniffer = FakeSniffer(pcap.getvalue(), 7)
+    assert sniffer.next_packet()[IP].dst == "10.0.0.0"
+    assert [p[IP].dst for p in sniffer.packets()] == ["10.0.0.1", "10.0.0.2"]
+
+
+def test_command_sniffer_doesnt_need_scapy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "scapy.utils", None)
+    with CommandSniffer("printf capture") as sniffer:
+        assert sniffer.read_all(5) == b"capture"
