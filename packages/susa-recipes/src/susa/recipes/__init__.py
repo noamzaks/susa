@@ -109,7 +109,8 @@ def argument_type(annotation: Any) -> Any:
         if typing.get_origin(annotation) in (Union, types.UnionType)
         else (annotation,)
     )
-    return Union[(*filter(has_json_schema, members), Reference, "Recipe")]
+    arguments = (*filter(has_json_schema, members), Reference, "Recipe")
+    return Union[arguments]  # noqa: UP007
 
 
 def has_json_schema(annotation: Any) -> bool:

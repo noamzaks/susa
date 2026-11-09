@@ -6,14 +6,11 @@ from typing import Any
 
 import pydantic
 import pytest
-from typing_extensions import override
 
-from susa.communicators.login import Login
-from susa.communicators.serial import SerialCommunicator
-from susa.core.machine import Serial, SerialAccessible
 from susa.libvirt import (
     LVDiskModel,
     LVInterfaceModel,
+    LVMachine,
     LVMachineModel,
     LVNetworkModel,
 )
@@ -26,8 +23,8 @@ DISK = "susa.libvirt.disk_model.LVDiskModel"
 INTERFACE = "susa.libvirt.interface_model.LVInterfaceModel"
 VOLUME = "susa.libvirt.volume_model.LVVolumeModel"
 MAC = "52:54:00:12:34:56"
-SSH = "susa.communicators.ssh.SSHCommunicator"
-SERIAL = "susa.communicators.serial.SerialCommunicator"
+LV_MACHINE = "susa.libvirt.machine.LVMachine"
+SUBNET = "susa.utilities.networking.SubnetReservation"
 
 
 def make_recipe(recipe: dict[str, Any]) -> Any:
@@ -115,31 +112,25 @@ def test_make_invalid_steps(steps: list[Any]) -> None:
         Recipe.model_validate({MACHINE: [{"arch": "x86_64"}, *steps]}).make()
 
 
-class Serials(SerialAccessible):
-    @override
-    def serial(self) -> Serial:
-        raise NotImplementedError
-
-
 def test_make_references() -> None:
-    machine = Serials()
-    recipe = {SERIAL: {"machine": {"$ref": "machine"}, "login": {"password": "a"}}}
-    serial: SerialCommunicator = Recipe.model_validate(recipe).make(machine=machine)
-    assert (serial.machine, serial.prelude) == (machine, Login("a"))
+    model = LVMachineModel("test")
+    recipe = {LV_MACHINE: {"model": {"$ref": "model"}}}
+    machine: LVMachine = Recipe.model_validate(recipe).make(model=model)
+    assert machine.model is model
 
-    recipe = {SERIAL: {"machine": {"$ref": "serial.machine"}}}
-    assert Recipe.model_validate(recipe).make(serial=serial).machine is machine
+    recipe = {LV_MACHINE: {"model": {"$ref": "machine.model"}}}
+    assert Recipe.model_validate(recipe).make(machine=machine).model is model
 
 
 @pytest.mark.parametrize(
     "recipe",
     (
         {"susa.nothing.Nothing": {}},
-        {SSH: {"username": "root"}},
-        {SSH: {"machine": "h", "username": "root", "colour": "red"}},
+        {LV_MACHINE: {}},
+        {SUBNET: {"subnets": "10.0.0.0/8", "colour": "red"}},
         {MACHINE: ["unknown"]},
-        {MACHINE: [], SSH: {}},
-        {SSH: {"machine": {"$ref": "nothing"}, "username": "root"}},
+        {MACHINE: [], SUBNET: {}},
+        {SUBNET: {"host": {"$ref": "nothing"}}},
     ),
 )
 def test_make_invalid(recipe: dict[str, Any]) -> None:
@@ -159,7 +150,7 @@ def test_schema() -> None:
     defs = schema["$defs"]
     for name, cls in CLASSES.items():
         assert list(defs[f"{cls.__name__}Recipe"]["properties"]) == [name]
-    ssh = defs["SSHCommunicator___init__"]
-    assert ssh["required"] == ["ip", "username"]
-    for argument in ("ip", "port", "host"):
-        assert {"$ref": "#/$defs/Reference"} in ssh["properties"][argument]["anyOf"]
+    assert defs["LVMachine___init__"]["required"] == ["model"]
+    subnet = defs["SubnetReservation___init__"]
+    for argument in ("host", "lock", "subnets"):
+        assert {"$ref": "#/$defs/Reference"} in subnet["properties"][argument]["anyOf"]
