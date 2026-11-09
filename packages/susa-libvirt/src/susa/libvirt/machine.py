@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import re
 import time
+import xml.etree.ElementTree as ET
 from collections.abc import Sequence
 
 from typing_extensions import override
@@ -19,10 +21,12 @@ from susa.core.machine import (
     Snapshot,
     Snapshottable,
 )
+from susa.core.saveable import Saveable
 from susa.core.serializable import JSON, deserialize, serialize
 from susa.libvirt._virsh import (
     virsh,
     virsh_command,
+    virsh_data,
     virsh_guarded,
     virsh_xml,
 )
@@ -30,7 +34,7 @@ from susa.libvirt.entity import LVEntity
 from susa.libvirt.interface_model import LVInterfaceModel
 from susa.libvirt.machine_model import LVMachineModel, LVSnapshotModel
 from susa.libvirt.network_model import LVNetworkModel
-from susa.utilities.generic import Guard, memory_file
+from susa.utilities.generic import Guard, memory_file, run
 
 
 class LVSnapshot(LVEntity[LVSnapshotModel], Snapshot):
@@ -81,6 +85,7 @@ class LVMachine(
     Screenshottable,
     SerialAccessible,
     KeyPressable,
+    Saveable,
 ):
     def __init__(self, model: LVMachineModel) -> None:
         super().__init__(model)
@@ -159,6 +164,64 @@ class LVMachine(
         virsh("send-key", self.name, "--codeset", "linux", "--holdtime", hold, *codes)
         time.sleep(hold_time)
 
+    @override
+    def save(self) -> JSON:
+        if not self.is_powered_on:
+            return {"memory": None, "volumes": self._save_volumes()}
+        pool, name = self._memory_volume()
+        path = f"{_pool_path(pool)}/{name}"
+        delete = ["vol-delete", "--pool", pool, name]
+        with virsh_guarded(["pool-refresh", pool], delete) as guard:
+            virsh("save", self.name, path, "--image-format", "zstd")
+            try:
+                volumes = self._save_volumes()
+                virsh("pool-refresh", pool)
+                memory = virsh_data("vol-download", "--pool", pool, name, "/dev/stdout")
+            finally:
+                virsh("restore", path)
+                virsh(*delete)
+            guard.cancel()
+        return {"memory": memory.hex(), "volumes": volumes}
+
+    @override
+    def restore(self, state: JSON) -> None:
+        assert isinstance(state, dict)
+        volumes, memory = state["volumes"], state["memory"]
+        assert isinstance(volumes, list)
+        with self._guarded() as self.guard:
+            for volume in volumes:
+                assert isinstance(volume, dict)
+                pool, name, contents = (
+                    volume["pool"],
+                    volume["name"],
+                    volume["contents"],
+                )
+                assert isinstance(pool, str) and isinstance(name, str)
+                assert isinstance(contents, str)
+                data = bytes.fromhex(contents)
+                virsh_data("vol-upload", "--pool", pool, name, "/dev/stdin", data=data)
+            if memory is None:
+                virsh_xml(self._xml(), "define")
+                return
+            assert isinstance(memory, str)
+            self._restore_memory(bytes.fromhex(memory))
+
+    def _restore_memory(self, memory: bytes) -> None:
+        pool, name = self._memory_volume()
+        delete = ["vol-delete", "--pool", pool, name]
+        with virsh_guarded(delete) as guard:
+            virsh("vol-create-as", pool, name, str(len(memory)), "--format", "raw")
+            try:
+                virsh_data(
+                    "vol-upload", "--pool", pool, name, "/dev/stdin", data=memory
+                )
+                path = virsh("vol-path", "--pool", pool, name).strip()
+                virsh_xml(virsh("save-image-dumpxml", path), "define")
+                virsh("restore", path)
+            finally:
+                virsh(*delete)
+            guard.cancel()
+
     def _guarded(self) -> contextlib.AbstractContextManager[Guard]:
         return virsh_guarded(["destroy", self.name], ["undefine", *self._undefine()])
 
@@ -168,6 +231,17 @@ class LVMachine(
             flags.append("--nvram")
         return [self.name, *flags]
 
+    def _save_volumes(self) -> JSON:
+        return [
+            {"pool": pool, "name": name, "contents": _volume_contents(pool, name).hex()}
+            for pool, name in self.model.get_volumes()
+        ]
+
+    def _memory_volume(self) -> tuple[str, str]:
+        volumes = self.model.get_volumes()
+        pool = volumes[0][0] if volumes else "default"
+        return pool, f"{self.name}.memory"
+
     def _reserved_ip(self, interface: LVInterfaceModel) -> str | None:
         network = interface.get_network()
         if network is None:
@@ -175,3 +249,22 @@ class LVMachine(
 
         xml = virsh("net-dumpxml", network)
         return LVNetworkModel.parse(xml).get_hosts().get(interface.get_mac())
+
+
+def _pool_path(pool: str) -> str:
+    path = ET.fromstring(virsh("pool-dumpxml", pool)).findtext("target/path")
+    assert path is not None
+    return path
+
+
+def _volume_contents(pool: str, name: str) -> bytes:
+    data = virsh_data("vol-download", "--pool", pool, name, "/dev/stdout")
+    if not data.startswith(b"QFI\xfb"):
+        return data
+    with memory_file(data) as file:
+        options = {"file": {"driver": "file", "filename": str(file)}, "backing": None}
+        image = "json:" + json.dumps({"driver": "qcow2", **options})
+        info = json.loads(run(["qemu-img", "info", "--output=json", image]))
+        for snapshot in info.get("snapshots", []):
+            run(["qemu-img", "snapshot", "-d", snapshot["name"], image])
+        return file.read_bytes()

@@ -22,6 +22,7 @@ from susa.communicators.unix import UnixCommunicator
 from susa.core.communicator import FileTransferrer
 from susa.core.machine import wait_until_booted
 from susa.core.resource import Resource
+from susa.core.saveable import SavedResources, save
 from susa.core.serializable import serialize
 from susa.libvirt import (
     LVMachine,
@@ -401,3 +402,21 @@ def test_sniff(machine: LVMachine, network: LVNetwork) -> None:
         if ICMP in p and p[ICMP].type == 8 and p[IP].dst == machine.ip
     ]
     assert len(requests) == 3
+
+
+def test_save(name: str, uri: None, tmp_path: Path) -> None:
+    if name != "freebsd10":
+        pytest.skip("Saving is tried on freebsd10")
+    with Session.model_validate({"objects": IMAGES[name].session()}) as session:
+        boot(session.get("machine", LVMachine))
+        with shell(session.get("machine", LVMachine), "ssh") as ssh:
+            ssh.check("echo saved > /root/susa-save")
+            booted = ssh.check("sysctl -n kern.boottime")
+        logging.info("Saving the machine")
+        saved = json.dumps(save(session.all(Resource)))
+    logging.info("Restoring the machine")
+    with SavedResources(json.loads(saved)) as restored:
+        [machine] = [r for r in restored.resources if isinstance(r, LVMachine)]
+        with shell(machine, "ssh") as ssh:
+            assert ssh.check("cat /root/susa-save") == b"saved\n"
+            assert ssh.check("sysctl -n kern.boottime") == booted
