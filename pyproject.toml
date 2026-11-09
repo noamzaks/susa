@@ -8,6 +8,7 @@ dependencies = [
     "susa-communicators",
     "susa-libvirt",
     "susa-podman",
+    "susa-recipes[communicators,libvirt,podman]",
 ]
 
 [tool.uv]
@@ -21,13 +22,14 @@ susa-core = { workspace = true }
 susa-communicators = { workspace = true }
 susa-libvirt = { workspace = true }
 susa-podman = { workspace = true }
+susa-recipes = { workspace = true }
 pytest-greendots = { git = "https://github.com/noamzaks/greendots", subdirectory = "pytest-greendots" }
 
 [tool.mypy]
 strict = true
 files = ["packages/*/src", "tests"]
 explicit_package_bases = true
-mypy_path = ["typings", "packages/susa-core/src", "packages/susa-communicators/src", "packages/susa-libvirt/src", "packages/susa-podman/src"]
+mypy_path = ["typings", "packages/susa-core/src", "packages/susa-communicators/src", "packages/susa-libvirt/src", "packages/susa-podman/src", "packages/susa-recipes/src"]
 enable_error_code = ["explicit-override"]
 # Abstract classes can be asked for (e.g. `cook(recipe, ShellCommunicator)`), as `isinstance` checks them.
 disable_error_code = ["type-abstract"]

@@ -51,6 +51,35 @@ class Snapshottable(ABC):
     def snapshot(self) -> Snapshot: ...
 
 
+class SnapshotGroup(Snapshot):
+    def __init__(self, snapshots: Sequence[Snapshot]) -> None:
+        self.snapshots = snapshots
+
+    @override
+    def create(self) -> None:
+        for snapshot in self.snapshots:
+            snapshot.create()
+
+    @override
+    def destroy(self) -> None:
+        for snapshot in reversed(self.snapshots):
+            snapshot.destroy()
+
+    @override
+    def revert(self) -> None:
+        for snapshot in self.snapshots:
+            snapshot.revert()
+
+
+class SnapshottableGroup(Snapshottable):
+    def __init__(self, snapshottables: Sequence[Snapshottable]) -> None:
+        self.snapshottables = snapshottables
+
+    @override
+    def snapshot(self) -> SnapshotGroup:
+        return SnapshotGroup([s.snapshot() for s in self.snapshottables])
+
+
 class Powerable(ABC):
     @property
     @abstractmethod

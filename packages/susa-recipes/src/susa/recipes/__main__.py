@@ -1,0 +1,14 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pydantic
+
+from susa.recipes import Recipe
+from susa.recipes.session import Session
+
+schema = pydantic.TypeAdapter(Recipe | Session).json_schema()
+(Path(__file__).parent / "recipe.schema.json").write_text(
+    json.dumps(schema, indent=2) + "\n"
+)
